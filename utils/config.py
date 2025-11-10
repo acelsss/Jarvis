@@ -17,6 +17,7 @@ class OpenMemoryConfig:
     exclude_types: List[str] = None
     endpoint_store: Optional[str] = None
     endpoint_search: Optional[str] = None
+    user_id: Optional[str] = None
     
     def __post_init__(self):
         if self.exclude_types is None:
@@ -52,7 +53,8 @@ class Settings:
             search_limit=int(os.getenv("OM_SEARCH_LIMIT", "5")),
             exclude_types=exclude_types,
             endpoint_store=os.getenv("OM_ENDPOINT_STORE") or None,
-            endpoint_search=os.getenv("OM_ENDPOINT_SEARCH") or None
+            endpoint_search=os.getenv("OM_ENDPOINT_SEARCH") or None,
+            user_id=os.getenv("OM_USER_ID") or None
         )
         
         llm_config = LLMConfig(

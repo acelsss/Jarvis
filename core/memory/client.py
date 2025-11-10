@@ -143,10 +143,23 @@ class MemoryClient:
             from datetime import datetime, timezone
             item.timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         
-        payload = item.to_dict()
+        # 先尝试第一个候选端点，判断是否为 v2 接口
+        first_candidate = self.store_candidates[0] if self.store_candidates else ""
+        is_v2_store = first_candidate.endswith("/memory/add") or first_candidate == "/memory/add"
+        
+        if is_v2_store:
+            # v2 格式：{"content": "<文本>", "user_id": "<用户ID>"}
+            payload = {
+                "content": item.content,
+                "user_id": self.cfg.user_id or "default"
+            }
+        else:
+            # 兼容原有格式
+            payload = item.to_dict()
         
         try:
             resp, path_used = self._try_endpoints(self.store_candidates, payload, "store")
+            self.log.info(f"[store] Used endpoint: {path_used}")
             
             result = {"path": path_used}
             if "id" in resp:
@@ -190,37 +203,75 @@ class MemoryClient:
         limit = limit or self.cfg.search_limit
         exclude_types = exclude_types or self.cfg.exclude_types
         
-        payload = {
-            "text": query_text,
-            "limit": limit
-        }
+        # 判断是否为 v2 接口
+        first_candidate = self.search_candidates[0] if self.search_candidates else ""
+        is_v2_query = first_candidate.endswith("/memory/query") or first_candidate == "/memory/query"
         
-        if exclude_types:
-            payload["exclude_types"] = exclude_types
+        if is_v2_query:
+            # v2 格式：{"query": "<关键词>", "k": <int>, "filters": {"user_id": "<用户ID>"}}
+            payload = {
+                "query": query_text,
+                "k": limit
+            }
+            if self.cfg.user_id:
+                payload["filters"] = {"user_id": self.cfg.user_id}
+        else:
+            # 兼容原有格式
+            payload = {
+                "text": query_text,
+                "limit": limit
+            }
+            if exclude_types:
+                payload["exclude_types"] = exclude_types
         
         try:
-            resp, _ = self._try_endpoints(self.search_candidates, payload, "search")
+            resp, path_used = self._try_endpoints(self.search_candidates, payload, "search")
+            self.log.info(f"[search] Used endpoint: {path_used}")
             
             # 统一映射响应为 SearchResult 列表
             results = []
             
-            # 处理不同的响应格式
-            items = resp
-            if isinstance(resp, dict):
-                items = resp.get("items", resp.get("results", resp.get("data", [])))
-            
-            for item in items:
-                if isinstance(item, dict):
-                    result = SearchResult(
-                        id=item.get("id") or item.get("id_") or item.get("_id"),
-                        type=item.get("type"),
-                        content=item.get("content") or item.get("text") or item.get("body", ""),
-                        timestamp=item.get("timestamp") or item.get("ts") or item.get("time"),
-                        score=item.get("score") or item.get("relevance"),
-                        source=item.get("source"),
-                        extras=item.get("extras") or item.get("meta")
-                    )
-                    results.append(result)
+            if is_v2_query:
+                # v2 响应格式：{"query": "...", "matches": [...]}
+                data = resp
+                matches = data.get("matches", [])
+                
+                for m in matches:
+                    if isinstance(m, dict):
+                        # 提取 extras 字段
+                        extras = {}
+                        for k in ("sectors", "path", "salience", "last_seen_at"):
+                            if k in m:
+                                extras[k] = m[k]
+                        
+                        result = SearchResult(
+                            id=m.get("id"),
+                            type=m.get("primary_sector"),
+                            content=m.get("content", ""),
+                            timestamp=None,  # v2 可能没有 timestamp
+                            score=m.get("score"),
+                            source=None,
+                            extras=extras if extras else None
+                        )
+                        results.append(result)
+            else:
+                # 兼容原有响应格式
+                items = resp
+                if isinstance(resp, dict):
+                    items = resp.get("items", resp.get("results", resp.get("data", [])))
+                
+                for item in items:
+                    if isinstance(item, dict):
+                        result = SearchResult(
+                            id=item.get("id") or item.get("id_") or item.get("_id"),
+                            type=item.get("type"),
+                            content=item.get("content") or item.get("text") or item.get("body", ""),
+                            timestamp=item.get("timestamp") or item.get("ts") or item.get("time"),
+                            score=item.get("score") or item.get("relevance"),
+                            source=item.get("source"),
+                            extras=item.get("extras") or item.get("meta")
+                        )
+                        results.append(result)
             
             return results
         
@@ -298,10 +349,14 @@ if __name__ == "__main__":
     from utils.config import Settings
     
     settings = Settings.load()
+    print(f"OM_USER_ID: {settings.om.user_id}")
+    print(f"OM_ENDPOINT_STORE: {settings.om.endpoint_store}")
+    print(f"OM_ENDPOINT_SEARCH: {settings.om.endpoint_search}")
+    
     client = MemoryClient(settings.om)
     
     # 测试 store
-    print("=== Testing store ===")
+    print("\n=== Testing store ===")
     test_item = make_memory_item(
         content="测试：我喜欢手冲咖啡，不加糖",
         default_type=settings.om.store_default_type
@@ -311,8 +366,12 @@ if __name__ == "__main__":
     
     # 测试 search
     print("\n=== Testing search ===")
-    search_results = client.search("咖啡", limit=2)
+    search_results = client.search("咖啡", limit=1)
     print(f"Found {len(search_results)} results")
-    for i, result in enumerate(search_results[:2], 1):
-        print(f"{i}. [{result.score or 'N/A'}] {result.content[:50]}...")
+    if search_results:
+        result = search_results[0]
+        print(f"First result: [{result.score or 'N/A'}] {result.content[:50]}...")
+        print(f"  Type: {result.type}, ID: {result.id}")
+    else:
+        print("No results found.")
 
