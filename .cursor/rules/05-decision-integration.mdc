@@ -1,0 +1,27 @@
+---
+description: Decision framework plus project integration practices (pattern alignment, tooling, consistency).
+alwaysApply: true
+globs:
+---
+
+# Decision Framework
+当存在多个可行方案时，按以下顺序做选择：
+1. **Testability** — 能否容易地为其编写和运行可靠测试？
+2. **Readability** — 6 个月后他人能否一眼看懂？
+3. **Consistency** — 是否符合项目现有模式与约定？
+4. **Simplicity** — 是否是“可工作的最简单解”？
+5. **Reversibility** — 若要改动/回滚有多难？
+
+# Project Integration
+
+## Learning the Codebase
+- 先找 **3 个相似的功能/组件** 学习
+- 识别并遵循 **常见模式与约定**
+- 复用 **相同的库/工具函数**（避免造轮子）
+- **测试方式** 与项目保持一致（夹具、辅助函数、命名等）
+
+## Tooling
+- 使用项目已有的 **构建系统**
+- 使用项目已有的 **测试框架**
+- 遵循项目的 **formatter / linter** 设置
+- **不要** 在无充分理由的情况下引入新工具/依赖；如需引入，必须说明收益、替代方案、迁移/回滚策略

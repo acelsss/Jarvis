@@ -1,0 +1,15 @@
+[Unit]
+Description=Jarvis Core Service
+After=network-online.target
+
+[Service]
+User=jetson
+WorkingDirectory=/home/jetson/projects/Jarvis
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/jetson/projects/Jarvis/.venv/bin/python /home/jetson/projects/Jarvis/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
