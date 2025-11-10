@@ -247,6 +247,35 @@ mouth.speak(reply.get("msg", "处理完成"))
 
 ---
 
+## 🔧 辅助命令
+
+### memory:search
+
+从终端直接检索 OpenMemory 记录，便于联调与排错。
+
+**用法示例：**
+```bash
+python -m scripts.memory_search --q "咖啡" --limit 5
+python -m scripts.memory_search -q "测试" -n 10 -x "transient,temp"
+```
+
+**输出格式：**
+表格形式展示检索结果，包含以下列：
+- `#` - 序号
+- `type` - 记录类型
+- `content` - 内容（自动截断，避免过长）
+- `timestamp` - 时间戳（格式化为 YYYY-MM-DD HH:MM）
+- `score` - 相关性分数（如有）
+
+**参数说明：**
+- `-q, --q` - 搜索关键词（必填）
+- `-n, --limit` - 结果数量限制（可选，默认使用配置值）
+- `-x, --exclude` - 排除的类型，逗号分隔（可选，默认使用配置值）
+
+**提示：** `--exclude` 参数可覆盖默认排除类型，便于临时调整搜索范围。
+
+---
+
 ## 🔌 OpenMemory 对接（极简闭环）
 
 ### 工作模式说明
