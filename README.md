@@ -247,6 +247,54 @@ mouth.speak(reply.get("msg", "处理完成"))
 
 ---
 
+## 🔌 OpenMemory 对接（极简闭环）
+
+### 工作模式说明
+
+本日（2025-11-10）的工作模式为**极简闭环**：
+- **每句话必存入 OpenMemory**：所有输入都会被持久化存储
+- **每轮必检索**：每次交互都会从 OpenMemory 检索相关记忆
+- **DeepSeek 回复**：检索结果与当前输入一起交给 DeepSeek 生成回复
+
+### 环境变量配置
+
+OpenMemory 与本程序运行在同一台 Jetson 上，默认端口为 **8081**。
+
+**必需配置：**
+- `OM_BASE_URL` - OpenMemory 服务地址（默认：`http://127.0.0.1:8081`）
+- `DEEPSEEK_API_KEY` - DeepSeek API 密钥（必须填写）
+
+**可选配置：**
+
+| 环境变量 | 说明 | 默认值 |
+|---------|------|--------|
+| `OM_API_KEY` | OpenMemory API 密钥 | 空 |
+| `OM_SOURCE` | 数据来源标识 | `Jarvis` |
+| `OM_TIMEOUT_MS` | 请求超时（毫秒） | `8000` |
+| `OM_STORE_DEFAULT_TYPE` | 默认存储类型 | `note` |
+| `OM_SEARCH_LIMIT` | 搜索返回数量限制 | `5` |
+| `OM_EXCLUDE_TYPES` | 排除的类型（逗号分隔） | `transient` |
+| `OM_ENDPOINT_STORE` | 显式覆盖存储端点 | 空（使用自适配） |
+| `OM_ENDPOINT_SEARCH` | 显式覆盖搜索端点 | 空（使用自适配） |
+| `LLM_PROVIDER` | LLM 提供商 | `deepseek` |
+| `DEEPSEEK_BASE_URL` | DeepSeek API 地址 | 空（使用官方地址） |
+
+**端点自适配说明：**
+
+若 `OM_ENDPOINT_STORE` 或 `OM_ENDPOINT_SEARCH` 留空，后续客户端将使用端点自适配机制（将在后续步骤实现），自动尝试常见的 API 路径（如 `/api/notes`、`/api/v1/notes`、`/notes` 等）。
+
+**配置示例：**
+
+```bash
+# 复制配置模板
+cp config/.env.local.example .env.local
+
+# 编辑并填写必需字段
+# 至少需要填写：DEEPSEEK_API_KEY
+```
+
+---
+
 ## 🛠️ 开发环境
 
 | 项目 | 版本 |

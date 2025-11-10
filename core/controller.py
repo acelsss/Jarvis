@@ -4,7 +4,7 @@ from core.formatter import as_text
 from core.handlers import note_handler, recall_handler, task_handler
 from utils.logger import get_logger
 from utils.config import Settings
-from memory.openmemory_client import OpenMemoryClient
+from memory.client_openmemory import OpenMemoryClient
 
 log = get_logger(__name__)
 

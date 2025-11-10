@@ -1,6 +1,6 @@
 from core.schemas import Request, Response
 from utils.logger import get_logger
-from memory.openmemory_client import OpenMemoryClient
+from memory.client_openmemory import OpenMemoryClient
 
 log = get_logger(__name__)
 
