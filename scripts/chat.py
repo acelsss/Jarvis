@@ -3,6 +3,7 @@ Jarvis Chat REPL：极简闭环（存储 → 检索 → LLM 回复）
 """
 from __future__ import annotations
 import sys
+import json
 from datetime import datetime
 from utils.config import Settings
 from utils.logger import get_logger
@@ -88,6 +89,22 @@ def main():
                 )
                 search_hits = len(search_results)
                 
+                # 调试输出：命中记忆内容和分数
+                if search_hits == 0:
+                    log.info("[debug][memory] no hits")
+                else:
+                    log.info(f"[debug][memory] hits={search_hits}")
+                    for idx, result in enumerate(search_results, 1):
+                        # 安全截断 content（最多 120 字符）
+                        content_display = result.content or ""
+                        if len(content_display) > 120:
+                            content_display = content_display[:120] + "..."
+                        
+                        # 格式化 score（保留 3 位小数，允许 None）
+                        score_str = f"{result.score:.3f}" if result.score is not None else "None"
+                        
+                        log.info(f"[debug][memory] #{idx} score={score_str} content={content_display}")
+                
                 # 转换为短句列表
                 for result in search_results:
                     memories_text.append(format_memory(result))
@@ -99,6 +116,28 @@ def main():
             reply = ""
             
             try:
+                # 构造 messages（与 chat_completion 内部逻辑一致）
+                memories_text_formatted = ""
+                if memories_text:
+                    memories_text_formatted = "\n相关记忆（可能为0~K条）：\n"
+                    for i, mem in enumerate(memories_text, 1):
+                        memories_text_formatted += f"{i}) {mem}\n"
+                
+                user_content = f"用户本轮发言：\n{user_input}\n"
+                if memories_text_formatted:
+                    user_content += f"\n{memories_text_formatted}\n请基于以上信息简洁作答。"
+                else:
+                    user_content += "\n请基于以上信息简洁作答。"
+                
+                messages = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content}
+                ]
+                
+                # 调试输出：打印 messages payload
+                messages_json = json.dumps(messages, ensure_ascii=False, indent=2)
+                log.info(f"[debug][llm] messages payload:\n{messages_json}")
+                
                 reply = chat_completion(
                     system_prompt=SYSTEM_PROMPT,
                     user_text=user_input,
