@@ -1,39 +1,29 @@
 """
-Jarvis Chat REPL：极简闭环（存储 → 检索 → LLM 回复）
+Jarvis Chat REPL：重构后的记忆读写闭环
+
+流程：
+1. 用户输入 → 消息分类（EXPLICIT_STORE / NEVER_STORE / CANDIDATE）
+2. 检索相关记忆（带时间戳）
+3. 构造 LLM 提示词（集中、清晰、易改）
+4. 调用 DeepSeek，解析 JSON 返回
+5. 根据 LLM 建议写入记忆（支持去重状态显示）
 """
 from __future__ import annotations
 import sys
 import json
-from datetime import datetime
+from typing import List
 from utils.config import Settings
 from utils.logger import get_logger
 from core.memory.client import MemoryClient
 from core.memory.types import make_memory_item
+from core.memory.classifier import classify_message_for_memory, MemoryStoreDecision
+from core.memory.metadata_builder import build_final_tags_and_metadata
 from core.llm.deepseek import chat_completion, LLMDisabledError
+from core.llm.prompt_builder import build_deepseek_prompt
+from core.llm.response_parser import parse_deepseek_response, LLMMemoryItem
 
 log = get_logger(__name__)
 
-SYSTEM_PROMPT = """你是一个智能助手 Jarvis。用户会向你提问或分享信息。
-请结合用户的本轮发言和相关记忆（如果有）给出简洁、有用的回复。
-如果相关记忆为空，仅基于用户本轮发言作答。"""
-
-def format_memory(result) -> str:
-    """格式化记忆为短句"""
-    content = result.content[:100]  # 限制长度
-    if len(result.content) > 100:
-        content += "..."
-    
-    # 提取日期
-    date_str = ""
-    if result.timestamp:
-        try:
-            dt = datetime.fromisoformat(result.timestamp.replace("Z", "+00:00"))
-            date_str = dt.strftime("%Y-%m-%d")
-        except:
-            pass
-    
-    type_str = f"[{result.type}]" if result.type else ""
-    return f"{type_str} {content}（{date_str}）" if date_str else f"{type_str} {content}"
 
 def main():
     """REPL 主循环"""
@@ -41,11 +31,13 @@ def main():
     
     # 初始化 MemoryClient
     mem_client = MemoryClient(settings.om, logger=log)
+    user_id = settings.om.user_id or "lushan"
+    channel = "repl"
     
     print("=" * 60)
     print("Jarvis Chat REPL")
     print("=" * 60)
-    print("每句话都会：存储 → 检索 → LLM 回复")
+    print("流程：分类 → 检索 → LLM → 落盘")
     print("输入空行忽略，Ctrl+C 或 Ctrl+D 退出")
     print("=" * 60)
     print()
@@ -62,25 +54,17 @@ def main():
             if not user_input:
                 continue
             
-            # a. 立即存储
-            store_status = "ok"
-            try:
-                item = make_memory_item(
-                    content=user_input,
-                    default_type=settings.om.store_default_type,
-                    source_app=settings.om.source,
-                    channel="chat"
-                )
-                store_result = mem_client.store(item)
-                if store_result.get("queued"):
-                    store_status = "queued"
-            except Exception as e:
-                log.error(f"Store failed: {type(e).__name__}: {e}")
-                store_status = "error"
+            # ============================================================
+            # 1. 消息分类
+            # ============================================================
+            policy = classify_message_for_memory(user_input)
+            log.info(f"[Jarvis][classify] policy={policy.value}, input_len={len(user_input)}")
             
-            # b. 检索相关记忆
+            # ============================================================
+            # 2. 检索相关记忆
+            # ============================================================
             search_hits = 0
-            memories_text = []
+            related_memories = []
             try:
                 search_results = mem_client.search(
                     query_text=user_input,
@@ -88,6 +72,7 @@ def main():
                     exclude_types=settings.om.exclude_types
                 )
                 search_hits = len(search_results)
+                related_memories = search_results
                 
                 # 调试输出：命中记忆内容和分数
                 if search_hits == 0:
@@ -103,70 +88,169 @@ def main():
                         # 格式化 score（保留 3 位小数，允许 None）
                         score_str = f"{result.score:.3f}" if result.score is not None else "None"
                         
-                        log.info(f"[debug][memory] #{idx} score={score_str} content={content_display}")
-                
-                # 转换为短句列表
-                for result in search_results:
-                    memories_text.append(format_memory(result))
+                        # 格式化时间戳
+                        ts_str = result.timestamp or "N/A"
+                        type_str = result.type or "N/A"
+                        
+                        log.info(f"[debug][memory] #{idx} (score={score_str}, type={type_str}, ts={ts_str})")
+                        log.info(f"[debug][memory]   {content_display}")
             except Exception as e:
-                log.error(f"Search failed: {type(e).__name__}: {e}")
+                log.error(f"[Jarvis][search] Failed: {type(e).__name__}: {e}")
             
-            # c. 调用 LLM 生成回复
+            # ============================================================
+            # 3. 构造 LLM 提示词并调用
+            # ============================================================
             llm_status = "offline"
             reply = ""
+            memories_to_store: List[LLMMemoryItem] = []
             
             try:
-                # 构造 messages（与 chat_completion 内部逻辑一致）
-                memories_text_formatted = ""
-                if memories_text:
-                    memories_text_formatted = "\n相关记忆（可能为0~K条）：\n"
-                    for i, mem in enumerate(memories_text, 1):
-                        memories_text_formatted += f"{i}) {mem}\n"
-                
-                user_content = f"用户本轮发言：\n{user_input}\n"
-                if memories_text_formatted:
-                    user_content += f"\n{memories_text_formatted}\n请基于以上信息简洁作答。"
-                else:
-                    user_content += "\n请基于以上信息简洁作答。"
-                
-                messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content}
-                ]
+                # 构造提示词（集中、清晰、易改）
+                system_prompt, user_prompt = build_deepseek_prompt(
+                    user_input=user_input,
+                    policy=policy,
+                    related_memories=related_memories
+                )
                 
                 # 调试输出：打印 messages payload
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
                 messages_json = json.dumps(messages, ensure_ascii=False, indent=2)
                 log.info(f"[debug][llm] messages payload:\n{messages_json}")
                 
-                reply = chat_completion(
-                    system_prompt=SYSTEM_PROMPT,
-                    user_text=user_input,
-                    memories=memories_text,
+                # 调用 DeepSeek
+                raw_response = chat_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
                     api_key=settings.llm.deepseek_api_key,
                     base_url=settings.llm.deepseek_base_url,
                     timeout_s=10
                 )
+                
+                # 解析返回的 JSON
+                reply, memories_to_store = parse_deepseek_response(raw_response)
                 llm_status = "used"
                 print(f"Jarvis> {reply}")
+                
             except LLMDisabledError:
                 # 降级模式
-                reply = f"已存储本条信息，检索到 {search_hits} 条相关记忆。当前未启用 LLM 生成答复。"
+                reply = f"已检索到 {search_hits} 条相关记忆。当前未启用 LLM 生成答复。"
                 print(f"Jarvis> {reply}")
             except Exception as e:
-                log.error(f"LLM call failed: {type(e).__name__}: {e}")
-                reply = f"已存储本条信息，检索到 {search_hits} 条相关记忆。LLM 服务暂时不可用。"
+                log.error(f"[Jarvis][llm] Failed: {type(e).__name__}: {e}")
+                reply = f"已检索到 {search_hits} 条相关记忆。LLM 服务暂时不可用。"
                 print(f"Jarvis> {reply}")
             
-            # 打印摘要
-            print(f"[store: {store_status}] [search: hits={search_hits}] [llm: {llm_status}]")
+            # ============================================================
+            # 4. 写入记忆（根据 LLM 建议）
+            # ============================================================
+            store_statuses = []
+            
+            # 4.1 处理 LLM 返回的 memories_to_store
+            if memories_to_store:
+                for mem_item in memories_to_store:
+                    try:
+                        # 合并 tags 和 metadata
+                        final_tags, final_metadata = build_final_tags_and_metadata(
+                            llm_tags=mem_item.tags,
+                            llm_metadata=mem_item.metadata,
+                            user_id=user_id,
+                            channel=channel,
+                            autolog=(policy != MemoryStoreDecision.EXPLICIT_STORE)  # 显式要求记录 → autolog=False
+                        )
+                        
+                        # 创建 MemoryItem
+                        memory_item = make_memory_item(
+                            content=mem_item.content,
+                            default_type=settings.om.store_default_type,
+                            source_app=settings.om.source,
+                            channel=channel,
+                            tags=final_tags,
+                            metadata=final_metadata
+                        )
+                        
+                        # 写入 OpenMemory
+                        store_result = mem_client.store(memory_item)
+                        
+                        if store_result.status == "error":
+                            store_statuses.append("error")
+                            log.warning(f"[Jarvis][store] Failed to store: {mem_item.content[:50]}...")
+                        else:
+                            store_statuses.append(store_result.status)
+                            log.info(f"[Jarvis][store] {store_result.status}: {mem_item.content[:50]}...")
+                    
+                    except Exception as e:
+                        log.error(f"[Jarvis][store] Error storing memory: {type(e).__name__}: {e}")
+                        store_statuses.append("error")
+            
+            # 4.2 EXPLICIT_STORE 的 fallback 处理
+            if policy == MemoryStoreDecision.EXPLICIT_STORE:
+                # 如果 JSON 解析失败或 memories_to_store 为空，使用 fallback
+                if not memories_to_store:
+                    log.info("[Jarvis][store] EXPLICIT_STORE fallback: storing user input directly")
+                    try:
+                        # 从用户输入中去掉显式前缀
+                        content = user_input
+                        for prefix in ["为了记录：", "为了记录,", "为了记录，", "帮我记一下", "帮我记住", "记一下", "记住这个"]:
+                            if content.startswith(prefix):
+                                content = content[len(prefix):].strip()
+                                break
+                        
+                        if content:
+                            # 使用系统 tags/metadata
+                            final_tags, final_metadata = build_final_tags_and_metadata(
+                                llm_tags=None,
+                                llm_metadata=None,
+                                user_id=user_id,
+                                channel=channel,
+                                autolog=False  # 显式要求记录
+                            )
+                            
+                            memory_item = make_memory_item(
+                                content=content,
+                                default_type=settings.om.store_default_type,
+                                source_app=settings.om.source,
+                                channel=channel,
+                                tags=final_tags,
+                                metadata=final_metadata
+                            )
+                            
+                            store_result = mem_client.store(memory_item)
+                            if store_result.status != "error":
+                                store_statuses.append("fallback")
+                                log.info(f"[Jarvis][store] fallback: {content[:50]}...")
+                    except Exception as e:
+                        log.error(f"[Jarvis][store] Fallback failed: {type(e).__name__}: {e}")
+            
+            # 4.3 NEVER_STORE 策略：忽略 LLM 返回的 memories_to_store
+            if policy == MemoryStoreDecision.NEVER_STORE:
+                # 对于明显 debug/命令类输入，不写入任何记忆
+                if memories_to_store:
+                    log.info(f"[Jarvis][store] NEVER_STORE: ignoring {len(memories_to_store)} LLM-suggested memories")
+            
+            # ============================================================
+            # 5. 打印摘要
+            # ============================================================
+            if store_statuses:
+                # 统计状态
+                status_summary = {}
+                for s in store_statuses:
+                    status_summary[s] = status_summary.get(s, 0) + 1
+                
+                status_str = ", ".join([f"{k}={v}" for k, v in status_summary.items()])
+                print(f"[store: {status_str}] [search: hits={search_hits}] [llm: {llm_status}]")
+            else:
+                print(f"[store: none] [search: hits={search_hits}] [llm: {llm_status}]")
             print()
         
         except Exception as e:
             # 任何异常都不退出 REPL
-            log.error(f"Unexpected error: {type(e).__name__}: {e}")
+            log.error(f"[Jarvis] Unexpected error: {type(e).__name__}: {e}")
             print(f"⚠️  发生错误：{type(e).__name__}，继续下一轮...")
             print()
 
+
 if __name__ == "__main__":
     main()
-

@@ -29,17 +29,19 @@ class SearchResult:
     id: Optional[str] = None
     type: Optional[str] = None
     content: str = ""
-    timestamp: Optional[str] = None
+    timestamp: Optional[str] = None  # 格式化的时间字符串（YYYY-MM-DD HH:MM）
     score: Optional[float] = None
     source: Optional[Dict[str, Any]] = None
     extras: Optional[Dict[str, Any]] = None
+    raw: Optional[Dict[str, Any]] = None  # 原始响应数据（包含原始时间戳等）
 
 def make_memory_item(
     content: str,
     default_type: str = "note",
     source_app: str = "Jarvis",
     channel: str = "cli",
-    tags: Optional[List[str]] = None
+    tags: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> MemoryItem:
     """
     创建记忆项的辅助函数
@@ -73,6 +75,14 @@ def make_memory_item(
         source=source,
         entities=None,
         importance=None,
-        extras=None
+        extras=metadata if metadata else None  # 将 metadata 存储在 extras 中
     )
+
+
+@dataclass
+class StoreResult:
+    """存储结果"""
+    status: str  # "new" 或 "dedup"
+    node_id: Optional[str] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
 

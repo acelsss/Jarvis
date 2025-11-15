@@ -54,7 +54,7 @@ class Settings:
             exclude_types=exclude_types,
             endpoint_store=os.getenv("OM_ENDPOINT_STORE") or None,
             endpoint_search=os.getenv("OM_ENDPOINT_SEARCH") or None,
-            user_id=os.getenv("OM_USER_ID") or None
+            user_id=os.getenv("OM_USER_ID") or "lushan"  # 默认用户 ID
         )
         
         llm_config = LLMConfig(

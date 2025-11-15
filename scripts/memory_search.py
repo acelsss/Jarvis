@@ -19,9 +19,12 @@ def format_content(content: str, max_len: int = 100) -> str:
     return content[:max_len - 3] + "..."
 
 def format_timestamp(ts: Optional[str]) -> str:
-    """格式化时间戳"""
+    """格式化时间戳（已格式化的时间字符串直接返回）"""
     if not ts:
         return ""
+    # 如果已经是 YYYY-MM-DD HH:MM 格式，直接返回
+    if len(ts) >= 16 and ts[4] == "-" and ts[7] == "-" and ts[10] == " " and ts[13] == ":":
+        return ts[:16]
     try:
         # 尝试解析 ISO 格式
         from datetime import datetime

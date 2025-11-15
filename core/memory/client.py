@@ -10,11 +10,52 @@ from typing import Optional, List, Dict, Any, Tuple
 from utils.http import request_json
 from utils.logger import get_logger
 from utils.config import OpenMemoryConfig
-from core.memory.types import MemoryItem, SearchResult, make_memory_item
+from core.memory.types import MemoryItem, SearchResult, StoreResult, make_memory_item
 
 log = get_logger(__name__)
 
 PENDING_FILE = Path("data/pending-memories.jsonl")
+
+
+def _format_timestamp(ts: Any) -> Optional[str]:
+    """
+    格式化时间戳为本地时间字符串（YYYY-MM-DD HH:MM）
+    
+    Args:
+        ts: 时间戳（可能是毫秒整数、ISO 字符串等）
+        
+    Returns:
+        格式化的时间字符串，或 None
+    """
+    if ts is None:
+        return None
+    
+    try:
+        from datetime import datetime
+        
+        # 如果是数字（毫秒时间戳）
+        if isinstance(ts, (int, float)):
+            dt = datetime.fromtimestamp(ts / 1000.0 if ts > 1e10 else ts)
+            return dt.strftime("%Y-%m-%d %H:%M")
+        
+        # 如果是字符串
+        if isinstance(ts, str):
+            # 尝试解析为数字
+            try:
+                ts_num = float(ts)
+                if ts_num > 1e10:  # 毫秒时间戳
+                    dt = datetime.fromtimestamp(ts_num / 1000.0)
+                else:  # 秒时间戳
+                    dt = datetime.fromtimestamp(ts_num)
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                # 尝试解析 ISO 格式
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                return dt.strftime("%Y-%m-%d %H:%M")
+        
+        return None
+    except Exception:
+        return None
 
 class MemoryClient:
     """OpenMemory 客户端（支持端点自适配、重试、本地队列）"""
@@ -127,7 +168,7 @@ class MemoryClient:
         # 所有端点都失败
         raise Exception(f"[{op_name}] All endpoints failed. Last error: {last_error}")
     
-    def store(self, item: MemoryItem) -> Dict[str, Any]:
+    def store(self, item: MemoryItem) -> StoreResult:
         """
         存储记忆项
         
@@ -135,8 +176,7 @@ class MemoryClient:
             item: 记忆项
         
         Returns:
-            成功：{"id": <可选>, "path": <使用端点>}
-            失败：{"queued": True, "reason": "..."}
+            StoreResult: 存储结果（包含 status: "new"/"dedup"）
         """
         # 确保有 timestamp
         if not item.timestamp:
@@ -148,11 +188,19 @@ class MemoryClient:
         is_v2_store = first_candidate.endswith("/memory/add") or first_candidate == "/memory/add"
         
         if is_v2_store:
-            # v2 格式：{"content": "<文本>", "user_id": "<用户ID>"}
+            # v2 格式：{"content": "<文本>", "user_id": "<用户ID>", "tags": [...], "metadata": {...}}
             payload = {
                 "content": item.content,
                 "user_id": self.cfg.user_id or "default"
             }
+            # 如果 item 包含 tags 和 metadata（从 source/extras 提取）
+            if item.source and isinstance(item.source, dict):
+                # 尝试从 source 中提取 tags
+                if "tags" in item.source:
+                    payload["tags"] = item.source["tags"]
+            if item.extras:
+                # extras 作为 metadata
+                payload["metadata"] = item.extras
         else:
             # 兼容原有格式
             payload = item.to_dict()
@@ -161,27 +209,34 @@ class MemoryClient:
             resp, path_used = self._try_endpoints(self.store_candidates, payload, "store")
             self.log.info(f"[store] Used endpoint: {path_used}")
             
-            result = {"path": path_used}
-            if "id" in resp:
-                result["id"] = resp["id"]
-            elif "_id" in resp:
-                result["id"] = resp["_id"]
+            # 解析 deduplicated 字段
+            deduplicated = resp.get("deduplicated", False)
+            status = "dedup" if deduplicated else "new"
             
-            return result
+            # 提取 node_id
+            node_id = resp.get("id") or resp.get("_id") or resp.get("node_id")
+            
+            return StoreResult(
+                status=status,
+                node_id=node_id,
+                raw=resp
+            )
         
         except Exception as e:
             # 失败：写入本地待补队列
-            self.log.warning(f"store failed, queuing to local: {type(e).__name__}: {e}")
+            self.log.warning(f"[Jarvis][store] Failed, queuing to local: {type(e).__name__}: {e}")
             
             # 追加到 JSONL 文件
             item_dict = item.to_dict()
             with open(PENDING_FILE, "a", encoding="utf-8") as f:
                 f.write(json.dumps(item_dict, ensure_ascii=False) + "\n")
             
-            return {
-                "queued": True,
-                "reason": f"{type(e).__name__}: {str(e)[:100]}"
-            }
+            # 返回一个表示失败的结果（status 设为 "error"）
+            return StoreResult(
+                status="error",
+                node_id=None,
+                raw={"queued": True, "reason": f"{type(e).__name__}: {str(e)[:100]}"}
+            )
     
     def search(
         self, 
@@ -238,9 +293,21 @@ class MemoryClient:
                 
                 for m in matches:
                     if isinstance(m, dict):
+                        # 提取时间戳（优先 last_seen_at，否则 created_at）
+                        timestamp_str = None
+                        raw_timestamp = None
+                        
+                        # 尝试提取 last_seen_at（可能是毫秒时间戳或 ISO 字符串）
+                        if "last_seen_at" in m:
+                            raw_timestamp = m["last_seen_at"]
+                            timestamp_str = _format_timestamp(raw_timestamp)
+                        elif "created_at" in m:
+                            raw_timestamp = m["created_at"]
+                            timestamp_str = _format_timestamp(raw_timestamp)
+                        
                         # 提取 extras 字段
                         extras = {}
-                        for k in ("sectors", "path", "salience", "last_seen_at"):
+                        for k in ("sectors", "path", "salience", "last_seen_at", "created_at"):
                             if k in m:
                                 extras[k] = m[k]
                         
@@ -248,10 +315,11 @@ class MemoryClient:
                             id=m.get("id"),
                             type=m.get("primary_sector"),
                             content=m.get("content", ""),
-                            timestamp=None,  # v2 可能没有 timestamp
+                            timestamp=timestamp_str,  # 格式化的时间字符串
                             score=m.get("score"),
                             source=None,
-                            extras=extras if extras else None
+                            extras=extras if extras else None,
+                            raw=m.copy()  # 保存原始数据
                         )
                         results.append(result)
             else:
@@ -262,14 +330,19 @@ class MemoryClient:
                 
                 for item in items:
                     if isinstance(item, dict):
+                        # 提取时间戳
+                        raw_timestamp = item.get("timestamp") or item.get("ts") or item.get("time")
+                        timestamp_str = _format_timestamp(raw_timestamp) if raw_timestamp else None
+                        
                         result = SearchResult(
                             id=item.get("id") or item.get("id_") or item.get("_id"),
                             type=item.get("type"),
                             content=item.get("content") or item.get("text") or item.get("body", ""),
-                            timestamp=item.get("timestamp") or item.get("ts") or item.get("time"),
+                            timestamp=timestamp_str,
                             score=item.get("score") or item.get("relevance"),
                             source=item.get("source"),
-                            extras=item.get("extras") or item.get("meta")
+                            extras=item.get("extras") or item.get("meta"),
+                            raw=item.copy()  # 保存原始数据
                         )
                         results.append(result)
             

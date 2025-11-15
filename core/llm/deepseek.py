@@ -16,8 +16,7 @@ DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 def chat_completion(
     system_prompt: str,
-    user_text: str,
-    memories: List[str],
+    user_prompt: str,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     timeout_s: int = 10
@@ -27,14 +26,13 @@ def chat_completion(
     
     Args:
         system_prompt: 系统提示词
-        user_text: 用户输入文本
-        memories: 相关记忆列表（字符串列表）
+        user_prompt: 用户提示词（已格式化好的完整内容）
         api_key: API 密钥（若为空则抛出 LLMDisabledError）
         base_url: API 基础地址（默认使用官方地址）
         timeout_s: 超时时间（秒）
     
     Returns:
-        模型回复文本
+        模型回复文本（原始 JSON 字符串）
     
     Raises:
         LLMDisabledError: API Key 缺失时抛出
@@ -46,29 +44,15 @@ def chat_completion(
     base = base_url or DEFAULT_DEEPSEEK_BASE_URL
     url = f"{base.rstrip('/')}/v1/chat/completions"
     
-    # 构建记忆文本
-    memories_text = ""
-    if memories:
-        memories_text = "\n相关记忆（可能为0~K条）：\n"
-        for i, mem in enumerate(memories, 1):
-            memories_text += f"{i}) {mem}\n"
-    
-    # 构建用户消息
-    user_content = f"用户本轮发言：\n{user_text}\n"
-    if memories_text:
-        user_content += f"\n{memories_text}\n请基于以上信息简洁作答。"
-    else:
-        user_content += "\n请基于以上信息简洁作答。"
-    
     # 构建请求体
     payload = {
         "model": "deepseek-chat",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
+            {"role": "user", "content": user_prompt}
         ],
         "temperature": 0.7,
-        "max_tokens": 1000
+        "max_tokens": 2000  # 增加 token 限制以支持 JSON 输出
     }
     
     headers = {
@@ -86,7 +70,7 @@ def chat_completion(
             timeout=timeout_s
         )
         
-        # 提取回复文本
+        # 提取回复文本（返回原始内容，由调用方解析 JSON）
         if "choices" in resp and len(resp["choices"]) > 0:
             message = resp["choices"][0].get("message", {})
             content = message.get("content", "")
