@@ -48,6 +48,8 @@
   - MemoryItem 的抽象（facts/index 的边界约束）
 - `core/contracts/skill.py`
   - JarvisSkill、Plan、PlanStep 的最小字段集合
+- `docs/contracts/route_contract_v0.2.md`
+  - RouteDecision 作为“内核 API 合同”，版本化管理，不随实现细节变化
 
 ### 2.1 兼容性原则
 - **字段新增**：允许（提供默认值）
