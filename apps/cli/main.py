@@ -120,10 +120,12 @@ async def main():
     available_skills = skills_registry.list_all()
     llm_client = None
     llm_router_enabled = os.getenv("LLM_ENABLE_ROUTER") == "1"
-    if llm_router_enabled:
+    llm_planner_enabled = os.getenv("LLM_ENABLE_PLANNER") == "1"
+    if llm_router_enabled or llm_planner_enabled:
         llm_client = build_llm_client()
         if llm_client is None:
             llm_router_enabled = False
+            llm_planner_enabled = False
 
     if llm_router_enabled:
         matched_skill, routed_tools = route_task(
@@ -150,7 +152,13 @@ async def main():
         plan.source = f"skill:{matched_skill.skill_id}"
     else:
         # 使用默认 Planner
-        plan = await planner.create_plan(task, available_tools, routed_tools)
+        plan = await planner.create_plan(
+            task,
+            available_tools,
+            routed_tools,
+            llm_client=llm_client if llm_planner_enabled else None,
+            audit_logger=audit_logger,
+        )
     
     task.update_status(TASK_STATUS_PLANNED)
     # 保存快照（包含 plan 和 skill_id）
