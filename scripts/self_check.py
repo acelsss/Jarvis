@@ -119,7 +119,8 @@ def _case1_qa(llm_ready: bool, llm_reason: str) -> Tuple[CaseResult, List[Dict[s
     entries = _read_jsonl_from_line(AUDIT_PATH, start_line)
 
     if rc != 0:
-        return CaseResult(name=name, status="FAIL", reason="CLI 返回非 0"), entries
+        error_detail = output[-500:] if len(output) > 500 else output
+        return CaseResult(name=name, status="FAIL", reason=f"CLI 返回非 0 (exit={rc}): {error_detail}"), entries
 
     forbidden = ["生成执行计划", "执行工具", "需要审批"]
     if any(token in output for token in forbidden):
@@ -141,7 +142,8 @@ def _case2_clarify(llm_ready: bool, llm_reason: str) -> Tuple[CaseResult, List[D
     entries = _read_jsonl_from_line(AUDIT_PATH, start_line)
 
     if rc != 0:
-        return CaseResult(name=name, status="FAIL", reason="CLI 返回非 0"), entries
+        error_detail = output[-500:] if len(output) > 500 else output
+        return CaseResult(name=name, status="FAIL", reason=f"CLI 返回非 0 (exit={rc}): {error_detail}"), entries
 
     if "生成执行计划" in output or "[7/8] 执行工具" in output or "执行工具" in output:
         return CaseResult(name=name, status="FAIL", reason="触发了规划/执行"), entries
@@ -161,7 +163,8 @@ def _case3_hard_guard() -> Tuple[CaseResult, List[Dict[str, Any]]]:
     entries = _read_jsonl_from_line(AUDIT_PATH, start_line)
 
     if rc != 0:
-        return CaseResult(name=name, status="FAIL", reason="CLI 返回非 0"), entries
+        error_detail = output[-500:] if len(output) > 500 else output
+        return CaseResult(name=name, status="FAIL", reason=f"CLI 返回非 0 (exit={rc}): {error_detail}"), entries
 
     if "[6/8] 风险评估" not in output:
         return CaseResult(name=name, status="FAIL", reason="未进入风险评估"), entries
@@ -185,7 +188,8 @@ def _case4_skill() -> Tuple[CaseResult, List[Dict[str, Any]]]:
     entries = _read_jsonl_from_line(AUDIT_PATH, start_line)
 
     if rc != 0:
-        return CaseResult(name=name, status="FAIL", reason="CLI 返回非 0"), entries
+        error_detail = output[-500:] if len(output) > 500 else output
+        return CaseResult(name=name, status="FAIL", reason=f"CLI 返回非 0 (exit={rc}): {error_detail}"), entries
 
     if "匹配到技能" not in output:
         return CaseResult(name=name, status="FAIL", reason="未匹配技能"), entries
@@ -205,6 +209,10 @@ def _case4_skill() -> Tuple[CaseResult, List[Dict[str, Any]]]:
 def main() -> int:
     repo_root = _repo_root()
     os.chdir(repo_root)
+
+    # 确保必要的目录存在
+    AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TASK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     audit_before = _count_lines(AUDIT_PATH)
     tasks_before = _count_lines(TASK_DB_PATH)
@@ -241,6 +249,8 @@ def main() -> int:
             print(f"{result.name}: SKIP - {result.reason}")
         else:
             print(f"{result.name}: FAIL - {result.reason}")
+            if len(result.reason) > 200:
+                print(f"  详细错误信息已包含在上方")
             failures.append(f"{result.name}: {result.reason}")
 
     if audit_after <= audit_before:
