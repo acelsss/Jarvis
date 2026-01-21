@@ -6,16 +6,8 @@ import os
 from typing import Optional
 
 from .client_base import LLMClient
+from .providers.gemini import GeminiClient
 from .providers.openai_compat import OpenAICompatibleClient
-
-
-class GeminiClient(LLMClient):
-    """Placeholder Gemini client."""
-
-    def complete_json(
-        self, purpose: str, system: str, user: str, schema_hint: str
-    ) -> dict:
-        raise NotImplementedError("Gemini client is not implemented yet.")
 
 
 def build_llm_client() -> Optional[LLMClient]:
