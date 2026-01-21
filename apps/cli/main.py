@@ -179,7 +179,11 @@ async def main():
                     use_planner_for_skill = True
             elif route_type in ("tool", "mcp"):
                 tool_ids = route_decision.get("tool_ids") or []
-                routed_tools = [tool_id for tool_id in tool_ids if tool_id in available_tools]
+                routed_tools = [
+                    tool_id
+                    for tool_id in tool_ids
+                    if tool_id in available_tools or (isinstance(tool_id, str) and tool_id.startswith("mcp."))
+                ]
                 if not routed_tools:
                     matched_skill, routed_tools = route_task(task, available_tools, available_skills)
             elif route_type == "qa":
@@ -337,11 +341,20 @@ async def main():
         
         tool = tool_registry.get(step.tool_id)
         if not tool:
-            print(f"    ✗ 错误: 工具 {step.tool_id} 未找到")
-            continue
-        
-        # 执行工具
-        tool_result = await tool_runner.run(tool, step.step_id, step.params)
+            if step.tool_id.startswith("mcp."):
+                print(f"    ✗ 错误: {step.tool_id} 未接入 MCP client")
+                tool_result = tool_runner.run_missing_mcp(step.tool_id, step.step_id)
+                audit_logger.log("mcp.missing_client", {
+                    "task_id": task.task_id,
+                    "step_id": step.step_id,
+                    "tool_id": step.tool_id,
+                })
+            else:
+                print(f"    ✗ 错误: 工具 {step.tool_id} 未找到")
+                continue
+        else:
+            # 执行工具
+            tool_result = await tool_runner.run(tool, step.step_id, step.params)
         
         if tool_result.success:
             print(f"    ✓ 执行成功")

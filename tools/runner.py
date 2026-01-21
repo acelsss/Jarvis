@@ -46,3 +46,13 @@ class ToolRunner:
                 error=str(e),
                 evidence_refs=[],
             )
+
+    def run_missing_mcp(self, tool_id: str, step_id: str) -> ToolResult:
+        """占位：MCP client 未接入时的失败结果。"""
+        return ToolResult(
+            tool_id=tool_id,
+            step_id=step_id,
+            success=False,
+            error="未接入 MCP client",
+            evidence_refs=[],
+        )

@@ -160,6 +160,17 @@ class Planner:
                     steps.append(step)
                     if len(steps) >= 3:
                         break
+                elif isinstance(tool_id, str) and tool_id.startswith("mcp."):
+                    step = PlanStep(
+                        step_id=generate_id("step"),
+                        tool_id=tool_id,
+                        description=f"执行 MCP 工具: {tool_id}",
+                        params={},
+                        risk_level=RISK_LEVEL_R2,
+                    )
+                    steps.append(step)
+                    if len(steps) >= 3:
+                        break
         
         # 如果还没有 file_tool，强制添加一个
         if not has_file_tool and "file" in available_tools:
@@ -266,13 +277,18 @@ class Planner:
                         if not isinstance(raw_step, dict):
                             continue
                         tool_id = raw_step.get("tool_id")
-                        if tool_id not in available_tools:
+                        if not tool_id:
+                            continue
+                        is_mcp_tool = isinstance(tool_id, str) and tool_id.startswith("mcp.")
+                        if tool_id not in available_tools and not is_mcp_tool:
                             continue
                         description = raw_step.get("description") or f"执行工具: {tool_id}"
                         params = raw_step.get("params")
                         if not isinstance(params, dict):
                             params = {}
                         risk_level = self._normalize_risk_level(raw_step.get("risk_level"))
+                        if is_mcp_tool and not raw_step.get("risk_level"):
+                            risk_level = RISK_LEVEL_R2
                         steps.append(
                             PlanStep(
                                 step_id=generate_id("step"),

@@ -190,8 +190,16 @@ def _validate_route_decision(
         selected_tools = decision.get("tool_ids")
         if not isinstance(selected_tools, list) or not selected_tools:
             return False, "invalid_tool_ids"
-        if any(tool_id not in tool_ids for tool_id in selected_tools):
-            return False, "unknown_tool_id"
+        if route_type == "tool":
+            if any(tool_id not in tool_ids for tool_id in selected_tools):
+                return False, "unknown_tool_id"
+        else:
+            for tool_id in selected_tools:
+                if tool_id in tool_ids:
+                    continue
+                if isinstance(tool_id, str) and tool_id.startswith("mcp."):
+                    continue
+                return False, "unknown_mcp_tool_id"
     if route_type == "clarify":
         questions = decision.get("clarify_questions")
         if not isinstance(questions, list) or not questions:
