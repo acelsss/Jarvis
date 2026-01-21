@@ -1,5 +1,6 @@
 """CLI main entry point."""
 import asyncio
+import os
 import sys
 from typing import Optional
 
@@ -18,6 +19,7 @@ from core.orchestrator.approval_gate import ApprovalGate
 from core.orchestrator.executor import Executor
 from core.context_engine.build_context import build_context, search_openmemory
 from core.router.route import route_task
+from core.llm.factory import build_llm_client
 from core.platform.audit import AuditLogger
 from core.platform.config import Config
 from tools.registry import ToolRegistry
@@ -116,7 +118,23 @@ async def main():
     print("[4/8] 路由任务...")
     available_tools = tool_registry.list_all()
     available_skills = skills_registry.list_all()
-    matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+    llm_client = None
+    llm_router_enabled = os.getenv("LLM_ENABLE_ROUTER") == "1"
+    if llm_router_enabled:
+        llm_client = build_llm_client()
+        if llm_client is None:
+            llm_router_enabled = False
+
+    if llm_router_enabled:
+        matched_skill, routed_tools = route_task(
+            task,
+            available_tools,
+            available_skills,
+            llm_client=llm_client,
+            audit_logger=audit_logger,
+        )
+    else:
+        matched_skill, routed_tools = route_task(task, available_tools, available_skills)
     
     if matched_skill:
         print(f"  - 匹配到技能: {matched_skill.name} ({matched_skill.skill_id})")
