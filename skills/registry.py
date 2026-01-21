@@ -72,7 +72,7 @@ class SkillsRegistry:
         if not self.adapters:
             self.adapters.append(ClaudeCodeAdapter())
     
-    def scan_workspace(self) -> None:
+    def scan_workspace(self, load_fulltext: bool = False) -> None:
         """扫描工作空间目录，加载所有技能。"""
         if not self.workspace_dir.exists():
             print(f"警告: 技能工作空间目录不存在: {self.workspace_dir}")
@@ -85,19 +85,38 @@ class SkillsRegistry:
             
             skill_md_path = skill_dir / "SKILL.md"
             if skill_md_path.exists():
-                # 尝试使用所有适配器解析技能文件
-                jarvis_skill = None
-                for adapter in self.adapters:
-                    # 尝试使用 parse_skill_md 方法（claude_code）
-                    if hasattr(adapter, "parse_skill_md"):
-                        jarvis_skill = adapter.parse_skill_md(str(skill_md_path))
-                        if jarvis_skill:
-                            break
-                    # 尝试使用 parse_skill_file 方法（agentskills）
-                    elif hasattr(adapter, "parse_skill_file"):
-                        jarvis_skill = adapter.parse_skill_file(str(skill_md_path))
-                        if jarvis_skill:
-                            break
+                if load_fulltext:
+                    # 尝试使用所有适配器解析技能文件
+                    jarvis_skill = None
+                    for adapter in self.adapters:
+                        # 尝试使用 parse_skill_md 方法（claude_code）
+                        if hasattr(adapter, "parse_skill_md"):
+                            jarvis_skill = adapter.parse_skill_md(str(skill_md_path))
+                            if jarvis_skill:
+                                break
+                        # 尝试使用 parse_skill_file 方法（agentskills）
+                        elif hasattr(adapter, "parse_skill_file"):
+                            jarvis_skill = adapter.parse_skill_file(str(skill_md_path))
+                            if jarvis_skill:
+                                break
+                else:
+                    metadata = self._load_frontmatter(skill_md_path)
+                    tags = metadata.get("tags", [])
+                    if isinstance(tags, str):
+                        tags = [tags]
+                    jarvis_skill = JarvisSkill(
+                        skill_id=skill_dir.name,
+                        name=metadata.get("name") or skill_dir.name,
+                        description=metadata.get("description") or "",
+                        tags=tags,
+                        instructions_md="",
+                        metadata={
+                            k: v
+                            for k, v in metadata.items()
+                            if k not in ("name", "description", "tags")
+                        },
+                        file_path=str(skill_md_path),
+                    )
                 
                 if jarvis_skill:
                     self.skills[jarvis_skill.skill_id] = jarvis_skill
@@ -214,6 +233,25 @@ class SkillsRegistry:
                 )
 
         return results
+
+    def load_skill_fulltext(self, skill_id: str) -> str:
+        """加载指定技能的完整说明文本。"""
+        # 优先读取 SKILL.md 全文
+        skill_dir = self.workspace_dir / skill_id
+        skill_md_path = skill_dir / "SKILL.md"
+        if skill_md_path.exists():
+            return skill_md_path.read_text(encoding="utf-8")
+
+        skill = self.skills.get(skill_id)
+        if skill:
+            if skill.instructions_md:
+                return skill.instructions_md
+            if skill.file_path:
+                path = Path(skill.file_path)
+                if path.exists():
+                    return path.read_text(encoding="utf-8")
+
+        return ""
     
     def search_by_tags(self, tags: List[str]) -> List[JarvisSkill]:
         """根据标签搜索技能。

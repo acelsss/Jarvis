@@ -204,6 +204,7 @@ class Planner:
         task: Task,
         available_tools: Dict[str, Any] = None,
         routed_tools: List[str] = None,
+        skill_fulltext: Optional[str] = None,
         llm_client: Any = None,
         audit_logger: Any = None,
     ) -> Plan:
@@ -240,8 +241,17 @@ class Planner:
                     [
                         f"任务描述: {task.description}",
                         "请规划步骤，包含 tool_id、params、risk_level（R0-R3）与 description。",
+                        "若提供了技能全文，请结合技能要求规划步骤。",
                     ]
                 )
+                if skill_fulltext:
+                    user = "\n".join(
+                        [
+                            user,
+                            "技能全文如下：",
+                            skill_fulltext,
+                        ]
+                    )
                 llm_result = llm_client.complete_json(
                     purpose="plan",
                     system=system,

@@ -128,6 +128,14 @@ async def main():
             if _risk_rank(step.risk_level) < min_rank:
                 step.risk_level = min_risk
 
+    def _load_skill_fulltext(skill_id: str) -> str:
+        fulltext = skills_registry.load_skill_fulltext(skill_id)
+        audit_logger.log("skill.loaded", {
+            "skill_id": skill_id,
+            "bytes_loaded": len(fulltext.encode("utf-8")),
+        })
+        return fulltext
+
     # 4. Router 路由
     print("[4/8] 路由任务...")
     available_tools = tool_registry.list_all()
@@ -144,6 +152,8 @@ async def main():
     route_decision = None
     matched_skill = None
     routed_tools = []
+    skill_fulltext = ""
+    use_planner_for_skill = False
 
     if llm_router_enabled and llm_client:
         capability_index = build_capability_index(skills_registry, tool_registry)
@@ -164,6 +174,9 @@ async def main():
                 matched_skill = available_skills.get(skill_id)
                 if not matched_skill:
                     matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+                else:
+                    skill_fulltext = _load_skill_fulltext(matched_skill.skill_id)
+                    use_planner_for_skill = True
             elif route_type in ("tool", "mcp"):
                 tool_ids = route_decision.get("tool_ids") or []
                 routed_tools = [tool_id for tool_id in tool_ids if tool_id in available_tools]
@@ -207,9 +220,25 @@ async def main():
     # 5. Planner 生成计划
     print("[5/8] 生成执行计划...")
     if matched_skill:
-        # 使用技能生成计划
-        plan = skill_to_plan(matched_skill, task.task_id, sandbox_root)
-        plan.source = f"skill:{matched_skill.skill_id}"
+        if not skill_fulltext:
+            skill_fulltext = _load_skill_fulltext(matched_skill.skill_id)
+        if use_planner_for_skill:
+            # 选中 skill 后，注入技能全文再规划
+            plan = await planner.create_plan(
+                task,
+                available_tools,
+                routed_tools,
+                skill_fulltext=skill_fulltext,
+                llm_client=llm_client if llm_planner_enabled else None,
+                audit_logger=audit_logger,
+            )
+            plan.source = f"skill:{matched_skill.skill_id}"
+        else:
+            # 使用技能生成计划（保持兼容）
+            if skill_fulltext:
+                matched_skill.instructions_md = skill_fulltext
+            plan = skill_to_plan(matched_skill, task.task_id, sandbox_root)
+            plan.source = f"skill:{matched_skill.skill_id}"
     else:
         # 使用默认 Planner
         plan = await planner.create_plan(
