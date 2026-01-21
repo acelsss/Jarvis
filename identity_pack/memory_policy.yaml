@@ -1,0 +1,22 @@
+# Memory Policy v0.1
+# 记忆策略配置
+
+storage:
+  task_db:
+    enabled: true
+    path: "./memory/task_db"
+  distilled:
+    enabled: true
+    path: "./memory/distilled"
+  raw_logs:
+    enabled: true
+    path: "./memory/raw_logs"
+
+retention:
+  task_db_days: 90
+  distilled_days: 180
+  raw_logs_days: 365
+
+privacy:
+  sensitive_fields: []
+  encryption: false  # v0.1 暂不实现

@@ -1,0 +1,16 @@
+# Voice Style v0.1
+# 定义系统的交互风格
+
+tone: "专业、友好、简洁"
+language: "zh-CN"
+formality: "适中"
+
+response_style:
+  - "清晰明确"
+  - "结构化输出"
+  - "提供上下文"
+
+error_handling:
+  - "友好提示"
+  - "提供解决建议"
+  - "记录详细错误信息"

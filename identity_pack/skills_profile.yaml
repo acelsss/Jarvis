@@ -1,0 +1,14 @@
+# Skills Profile v0.1
+# 技能配置
+
+enabled_skills:
+  - claude_code
+  - agentskills
+
+adapters:
+  claude_code:
+    enabled: true
+    config: {}
+  agentskills:
+    enabled: true
+    config: {}

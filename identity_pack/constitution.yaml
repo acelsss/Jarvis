@@ -1,0 +1,16 @@
+# Jarvis Constitution v0.1
+# 定义系统的核心原则和行为准则
+
+principles:
+  - name: "安全第一"
+    description: "所有操作必须经过风险评估"
+  - name: "可审计"
+    description: "所有操作必须记录审计日志"
+  - name: "契约驱动"
+    description: "所有交互通过明确定义的契约进行"
+
+constraints:
+  - name: "资源限制"
+    description: "限制 CPU、内存、网络使用"
+  - name: "文件系统边界"
+    description: "限制文件系统访问范围"
