@@ -1,5 +1,6 @@
 """Audit logging."""
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -8,13 +9,18 @@ from typing import Any, Dict
 class AuditLogger:
     """审计日志记录器（JSONL格式）。"""
     
-    def __init__(self, log_path: str = "./memory/raw_logs/audit.log.jsonl"):
+    def __init__(self, log_path: str = None):
         """初始化审计日志记录器。
         
         Args:
-            log_path: 日志文件路径（JSONL格式）
+            log_path: 日志文件路径（JSONL格式）。如果为 None，则从环境变量 AUDIT_LOG_PATH 读取，
+                     如果环境变量也未设置，则使用默认值 "./memory/raw_logs/audit.log.jsonl"
         """
+        if log_path is None:
+            log_path = os.getenv("AUDIT_LOG_PATH", "./memory/raw_logs/audit.log.jsonl")
+        
         self.log_path = Path(log_path)
+        # 确保目录存在
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
     
     def log(self, event_type: str, details: Dict[str, Any]) -> None:
