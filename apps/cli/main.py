@@ -17,6 +17,7 @@ from core.orchestrator.task_manager import TaskManager
 from core.orchestrator.planner import Planner
 from core.orchestrator.approval_gate import ApprovalGate
 from core.orchestrator.executor import Executor
+from core.orchestrator.qa_handler import handle_qa
 from core.context_engine.build_context import build_context, search_openmemory
 from core.router.route import route_task, route_llm_first
 from core.llm.factory import build_llm_client
@@ -168,8 +169,24 @@ async def main():
                 routed_tools = [tool_id for tool_id in tool_ids if tool_id in available_tools]
                 if not routed_tools:
                     matched_skill, routed_tools = route_task(task, available_tools, available_skills)
-            elif route_type in ("clarify", "qa"):
-                print("\n需要澄清或问答，不进入规划与执行。")
+            elif route_type == "qa":
+                print("\n进入问答模式，不进入规划与执行。")
+                answer = handle_qa(
+                    task.description,
+                    context,
+                    llm_client,
+                    audit_logger=audit_logger,
+                )
+                task.update_status(TASK_STATUS_COMPLETED)
+                task_manager.update_task(task, extra_info={"qa_answer": answer})
+                audit_logger.log("task_completed", {
+                    "task_id": task.task_id,
+                    "qa": True,
+                })
+                print(f"\n回答:\n{answer}")
+                return
+            elif route_type == "clarify":
+                print("\n需要澄清，不进入规划与执行。")
                 questions = route_decision.get("clarify_questions") or []
                 if questions:
                     print("澄清问题：")
