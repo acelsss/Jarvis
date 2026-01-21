@@ -104,6 +104,7 @@ async def main():
     context = build_context(task, openmemory_results=openmemory_results)
     task.context = context
     task.update_status(TASK_STATUS_CONTEXT_BUILT)
+    task_manager.update_task(task)  # 保存快照
     audit_logger.log("context_built", {
         "task_id": task.task_id,
         "openmemory_results_count": len(openmemory_results),
@@ -134,6 +135,12 @@ async def main():
         plan = await planner.create_plan(task, available_tools, routed_tools)
     
     task.update_status(TASK_STATUS_PLANNED)
+    # 保存快照（包含 plan 和 skill_id）
+    task_manager.update_task(task, extra_info={
+        "plan": plan,
+        "skill_id": matched_skill.skill_id if matched_skill else None,
+        "routed_tools": routed_tools,
+    })
     audit_logger.log("plan_created", {
         "task_id": task.task_id,
         "plan_id": plan.plan_id,
@@ -155,6 +162,7 @@ async def main():
     approval = None
     if risk_assessment.is_approval_required():
         task.update_status(TASK_STATUS_WAITING_APPROVAL)
+        task_manager.update_task(task, extra_info={"plan": plan})  # 保存快照
         audit_logger.log("waiting_approval", {
             "task_id": task.task_id,
             "risk_level": risk_assessment.risk_level,
@@ -167,6 +175,7 @@ async def main():
             if user_input in ("yes", "y"):
                 approval = approval_gate.approve(task.task_id, approved=True, approver="user")
                 task.update_status(TASK_STATUS_APPROVED)
+                task_manager.update_task(task, extra_info={"plan": plan, "approval": approval})  # 保存快照
                 audit_logger.log("task_approved", {
                     "approval_id": approval.approval_id,
                     "task_id": task.task_id,
@@ -176,6 +185,7 @@ async def main():
                 break
             elif user_input in ("no", "n"):
                 approval = approval_gate.approve(task.task_id, approved=False, approver="user")
+                task_manager.update_task(task, extra_info={"plan": plan, "approval": approval})  # 保存快照
                 audit_logger.log("task_rejected", {
                     "approval_id": approval.approval_id,
                     "task_id": task.task_id,
@@ -189,6 +199,7 @@ async def main():
         # 自动批准低风险任务
         approval = approval_gate.approve(task.task_id, approved=True, approver="system")
         task.update_status(TASK_STATUS_APPROVED)
+        task_manager.update_task(task, extra_info={"plan": plan, "approval": approval})  # 保存快照
         audit_logger.log("task_auto_approved", {
             "approval_id": approval.approval_id,
             "task_id": task.task_id,
@@ -259,6 +270,13 @@ async def main():
     
     # 8. 任务完成
     task.update_status(TASK_STATUS_COMPLETED)
+    # 保存最终快照（包含完整信息）
+    task_manager.update_task(task, extra_info={
+        "plan": plan,
+        "skill_id": matched_skill.skill_id if matched_skill else None,
+        "routed_tools": routed_tools,
+        "approval": approval,
+    })
     audit_logger.log("task_completed", {
         "task_id": task.task_id,
         "artifacts": task.artifacts,
