@@ -18,10 +18,11 @@ from core.orchestrator.planner import Planner
 from core.orchestrator.approval_gate import ApprovalGate
 from core.orchestrator.executor import Executor
 from core.context_engine.build_context import build_context, search_openmemory
-from core.router.route import route_task
+from core.router.route import route_task, route_llm_first
 from core.llm.factory import build_llm_client
 from core.platform.audit import AuditLogger
 from core.platform.config import Config
+from core.capabilities.index_builder import build_capability_index
 from tools.registry import ToolRegistry
 from tools.runner import ToolRunner
 from tools.local.shell_tool import ShellTool
@@ -114,6 +115,18 @@ async def main():
     print(f"  - 身份配置已加载")
     print(f"  - OpenMemory 搜索结果: {len(openmemory_results)} 条")
     
+    def _risk_rank(value: str) -> int:
+        rank_map = {"R0": 0, "R1": 1, "R2": 2, "R3": 3}
+        return rank_map.get((value or "").upper(), 2)
+
+    def _enforce_min_risk(plan, min_risk: str) -> None:
+        if not min_risk:
+            return
+        min_rank = _risk_rank(min_risk)
+        for step in plan.steps:
+            if _risk_rank(step.risk_level) < min_rank:
+                step.risk_level = min_risk
+
     # 4. Router 路由
     print("[4/8] 路由任务...")
     available_tools = tool_registry.list_all()
@@ -127,14 +140,44 @@ async def main():
             llm_router_enabled = False
             llm_planner_enabled = False
 
-    if llm_router_enabled:
-        matched_skill, routed_tools = route_task(
-            task,
-            available_tools,
-            available_skills,
-            llm_client=llm_client,
+    route_decision = None
+    matched_skill = None
+    routed_tools = []
+
+    if llm_router_enabled and llm_client:
+        capability_index = build_capability_index(skills_registry, tool_registry)
+        route_decision = route_llm_first(
+            task.description,
+            context,
+            capability_index,
+            llm_client,
             audit_logger=audit_logger,
         )
+
+        if route_decision.get("fallback_to_rule"):
+            matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+        else:
+            route_type = route_decision.get("route_type")
+            if route_type == "skill":
+                skill_id = route_decision.get("skill_id")
+                matched_skill = available_skills.get(skill_id)
+                if not matched_skill:
+                    matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+            elif route_type in ("tool", "mcp"):
+                tool_ids = route_decision.get("tool_ids") or []
+                routed_tools = [tool_id for tool_id in tool_ids if tool_id in available_tools]
+                if not routed_tools:
+                    matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+            elif route_type in ("clarify", "qa"):
+                print("\n需要澄清或问答，不进入规划与执行。")
+                questions = route_decision.get("clarify_questions") or []
+                if questions:
+                    print("澄清问题：")
+                    for q in questions:
+                        print(f"- {q}")
+                return
+            else:
+                matched_skill, routed_tools = route_task(task, available_tools, available_skills)
     else:
         matched_skill, routed_tools = route_task(task, available_tools, available_skills)
     
@@ -159,6 +202,9 @@ async def main():
             llm_client=llm_client if llm_planner_enabled else None,
             audit_logger=audit_logger,
         )
+
+    if route_decision:
+        _enforce_min_risk(plan, route_decision.get("min_risk"))
     
     task.update_status(TASK_STATUS_PLANNED)
     # 保存快照（包含 plan 和 skill_id）

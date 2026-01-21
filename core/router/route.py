@@ -1,11 +1,12 @@
 """Routing logic."""
 import json
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.contracts.task import Task
 from core.contracts.skill import JarvisSkill
-from core.llm.schemas import ROUTE_SCHEMA
+from core.llm.schemas import ROUTE_SCHEMA, ROUTE_SCHEMA_V0_2, CAPABILITY_INDEX_SCHEMA_HINT
 
 
 def _truncate_text(text: str, max_len: int = 120) -> str:
@@ -57,24 +58,264 @@ def _get_llm_model(provider: str) -> Optional[str]:
 def _log_llm_route(
     audit_logger: Any,
     provider: str,
-    purpose: str,
     confidence: Optional[float],
-    reason: str,
-    selected_skill_id: Optional[str],
-    selected_tool_ids: List[str],
+    route_type: str,
+    skill_id: Optional[str],
+    tool_ids: List[str],
+    questions: Optional[List[str]] = None,
 ) -> None:
     if not audit_logger:
         return
+    safe_questions = []
+    if isinstance(questions, list):
+        safe_questions = [_truncate_text(q or "", max_len=120) for q in questions[:3]]
     details = {
         "provider": provider,
         "model": _get_llm_model(provider),
-        "purpose": purpose,
         "confidence": confidence,
-        "reason": _truncate_text(reason or "", max_len=200),
-        "selected_skill_id": selected_skill_id,
-        "selected_tool_ids": selected_tool_ids,
+        "route_type": route_type,
+        "skill_id": skill_id,
+        "tool_ids": tool_ids,
+        "questions": safe_questions,
     }
     audit_logger.log("llm.route", details)
+
+
+def _hard_guard_match(text: str) -> Optional[str]:
+    lowered = text.lower()
+    patterns = [
+        r"\brm\b",
+        r"\bsudo\b",
+        r"\bdelete\b",
+        r"\boverwrite\b",
+        r"\bexecute script\b",
+        r"\brun script\b",
+        r"\bpayment\b",
+        r"\bpay\b",
+        r"\blogin\b",
+        "删除",
+        "覆盖",
+        "执行脚本",
+        "付款",
+        "支付",
+        "转账",
+        "登录",
+        "操作电脑",
+        "点击",
+        "输入",
+    ]
+    for pattern in patterns:
+        if pattern.startswith(r"\b"):
+            if re.search(pattern, lowered):
+                return pattern
+        elif pattern in lowered:
+            return pattern
+    return None
+
+
+def _truncate_capability_index(capability_index: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(capability_index, dict):
+        return {}
+    skills = []
+    for item in capability_index.get("skills", []) or []:
+        if not isinstance(item, dict):
+            continue
+        skills.append(
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "description": _truncate_text(item.get("description") or "", 120),
+                "tags": item.get("tags") or [],
+                "allowed_tools": item.get("allowed_tools") or [],
+                "disable_model_invocation": bool(item.get("disable_model_invocation", False)),
+                "path": item.get("path"),
+            }
+        )
+    tools = []
+    for item in capability_index.get("tools", []) or []:
+        if not isinstance(item, dict):
+            continue
+        tools.append(
+            {
+                "id": item.get("id"),
+                "description": _truncate_text(item.get("description") or "", 120),
+                "risk_default": item.get("risk_default"),
+            }
+        )
+    return {
+        "skills": skills,
+        "tools": tools,
+        "mcp": capability_index.get("mcp", []) or [],
+    }
+
+
+def _build_context_summary(context_bundle: Any) -> Dict[str, Any]:
+    if not isinstance(context_bundle, dict):
+        return {}
+    identity = context_bundle.get("identity") or {}
+    preferences = identity.get("preferences") or {}
+    return {
+        "task_id": context_bundle.get("task_id"),
+        "status": context_bundle.get("status"),
+        "preferences": preferences.get("sandbox", {}) or {},
+        "openmemory_count": len(context_bundle.get("openmemory", []) or []),
+    }
+
+
+def _normalize_confidence(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _validate_route_decision(
+    decision: Dict[str, Any],
+    capability_index: Dict[str, Any],
+) -> Tuple[bool, str]:
+    route_type = decision.get("route_type")
+    if route_type not in {"qa", "skill", "tool", "mcp", "clarify"}:
+        return False, "invalid_route_type"
+
+    skill_ids = {item.get("id") for item in capability_index.get("skills", []) or []}
+    tool_ids = {item.get("id") for item in capability_index.get("tools", []) or []}
+
+    if route_type == "skill":
+        skill_id = decision.get("skill_id")
+        if not skill_id or skill_id not in skill_ids:
+            return False, "invalid_skill_id"
+    if route_type in {"tool", "mcp"}:
+        selected_tools = decision.get("tool_ids")
+        if not isinstance(selected_tools, list) or not selected_tools:
+            return False, "invalid_tool_ids"
+        if any(tool_id not in tool_ids for tool_id in selected_tools):
+            return False, "unknown_tool_id"
+    if route_type == "clarify":
+        questions = decision.get("clarify_questions")
+        if not isinstance(questions, list) or not questions:
+            return False, "invalid_clarify_questions"
+    return True, "ok"
+
+
+def route_llm_first(
+    task_text: str,
+    context_bundle: Any,
+    capability_index: Dict[str, Any],
+    llm_client: Any,
+    audit_logger: Any = None,
+) -> Dict[str, Any]:
+    """LLM-first 路由，输出 RouteDecision 字典。"""
+    guard_hit = _hard_guard_match(task_text)
+    if guard_hit:
+        tool_ids = [
+            tool.get("id")
+            for tool in capability_index.get("tools", []) or []
+            if isinstance(tool, dict) and tool.get("id") == "shell"
+        ]
+        if not tool_ids:
+            tool_ids = [
+                tool.get("id")
+                for tool in capability_index.get("tools", []) or []
+                if isinstance(tool, dict) and tool.get("id")
+            ]
+        decision = {
+            "route_type": "tool",
+            "reason": f"hard_guard:{guard_hit}",
+            "confidence": 1.0,
+            "tool_ids": tool_ids,
+            "min_risk": "R2",
+        }
+        _log_llm_route(
+            audit_logger,
+            provider="hard_guard",
+            confidence=1.0,
+            route_type="tool",
+            skill_id=None,
+            tool_ids=tool_ids,
+            questions=None,
+        )
+        return decision
+
+    if not llm_client:
+        return {"fallback_to_rule": True, "reason": "llm_unavailable"}
+
+    provider = os.getenv("LLM_PROVIDER", "unknown")
+    truncated_index = _truncate_capability_index(capability_index or {})
+    context_summary = _build_context_summary(context_bundle)
+    system = "\n".join(
+        [
+            "You are a routing assistant.",
+            "Return JSON ONLY using the RouteDecision schema.",
+            f"RouteDecision schema: {ROUTE_SCHEMA_V0_2}",
+            f"Capability index fields: {CAPABILITY_INDEX_SCHEMA_HINT}",
+            "Capability index (summary JSON):",
+            json.dumps(truncated_index, ensure_ascii=False),
+        ]
+    )
+    user = "\n".join(
+        [
+            f"User input: {task_text}",
+            "Important context summary JSON:",
+            json.dumps(context_summary, ensure_ascii=False),
+        ]
+    )
+    try:
+        llm_result = llm_client.complete_json(
+            purpose="route",
+            system=system,
+            user=user,
+            schema_hint=ROUTE_SCHEMA_V0_2,
+        )
+    except Exception:
+        return {"fallback_to_rule": True, "reason": "llm_error"}
+
+    if not isinstance(llm_result, dict):
+        return {"fallback_to_rule": True, "reason": "invalid_llm_result"}
+
+    confidence = _normalize_confidence(llm_result.get("confidence"))
+    if confidence is not None and confidence < 0.45:
+        decision = {
+            "route_type": "clarify",
+            "reason": "low_confidence",
+            "confidence": confidence,
+            "clarify_questions": llm_result.get("clarify_questions")
+            or ["请补充目标与约束，方便选择合适的执行路径。"],
+        }
+        _log_llm_route(
+            audit_logger,
+            provider=provider,
+            confidence=confidence,
+            route_type="clarify",
+            skill_id=None,
+            tool_ids=[],
+            questions=decision.get("clarify_questions"),
+        )
+        return decision
+
+    is_valid, reason = _validate_route_decision(llm_result, truncated_index)
+    if not is_valid:
+        return {"fallback_to_rule": True, "reason": reason}
+
+    decision = {
+        "route_type": llm_result.get("route_type"),
+        "reason": llm_result.get("reason") or "",
+        "confidence": confidence,
+        "skill_id": llm_result.get("skill_id"),
+        "tool_ids": llm_result.get("tool_ids") or [],
+        "clarify_questions": llm_result.get("clarify_questions") or [],
+    }
+    _log_llm_route(
+        audit_logger,
+        provider=provider,
+        confidence=confidence,
+        route_type=decision["route_type"],
+        skill_id=decision.get("skill_id"),
+        tool_ids=decision.get("tool_ids") or [],
+        questions=decision.get("clarify_questions"),
+    )
+    return decision
 
 
 def route_task(
@@ -174,11 +415,11 @@ def route_task(
                         _log_llm_route(
                             audit_logger,
                             provider,
-                            purpose,
                             confidence if isinstance(confidence, (int, float)) else None,
-                            reason,
+                            "skill",
                             skill_id,
                             [],
+                            None,
                         )
                         return (selected_skill, [])
 
@@ -192,11 +433,11 @@ def route_task(
                 _log_llm_route(
                     audit_logger,
                     provider,
-                    purpose,
                     confidence if isinstance(confidence, (int, float)) else None,
-                    reason,
+                    "tool",
                     None,
                     selected_tools,
+                    None,
                 )
                 if selected_tools:
                     return (None, selected_tools)
@@ -204,11 +445,11 @@ def route_task(
             _log_llm_route(
                 audit_logger,
                 provider,
-                purpose,
                 None,
-                "llm_error",
+                "error",
                 None,
                 [],
+                None,
             )
             print("LLM 路由不可用，已回退规则路由。")
 
