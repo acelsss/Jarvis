@@ -49,20 +49,26 @@ class TaskManager:
             if "plan" in extra_info and extra_info["plan"]:
                 plan = extra_info["plan"]
                 if hasattr(plan, "__dict__"):
-                    plan_dict = {
-                        "plan_id": getattr(plan, "plan_id", None),
-                        "source": getattr(plan, "source", None),
-                        "steps_count": len(getattr(plan, "steps", [])),
-                        "steps": [
-                            {
-                                "step_id": getattr(step, "step_id", None),
-                                "tool_id": getattr(step, "tool_id", None),
-                                "description": getattr(step, "description", None),
-                                "risk_level": getattr(step, "risk_level", None),
-                            }
-                            for step in getattr(plan, "steps", [])
-                        ] if hasattr(plan, "steps") else [],
-                    }
+                    # 使用 plan_to_dict 确保 JSON-safe
+                    try:
+                        from skills.runtime.to_plan import plan_to_dict
+                        plan_dict = plan_to_dict(plan)
+                    except ImportError:
+                        # 如果导入失败，使用降级方案
+                        plan_dict = {
+                            "plan_id": getattr(plan, "plan_id", None),
+                            "source": getattr(plan, "source", None),
+                            "steps_count": len(getattr(plan, "steps", [])),
+                            "steps": [
+                                {
+                                    "step_id": getattr(step, "step_id", None),
+                                    "tool_id": getattr(step, "tool_id", None),
+                                    "description": getattr(step, "description", None),
+                                    "risk_level": getattr(step, "risk_level", None),
+                                }
+                                for step in getattr(plan, "steps", [])
+                            ] if hasattr(plan, "steps") else [],
+                        }
                     task_dict["plan"] = plan_dict
                 else:
                     task_dict["plan"] = extra_info["plan"]

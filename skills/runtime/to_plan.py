@@ -1,5 +1,7 @@
 """Plan conversion utilities."""
 import re
+import warnings
+import json
 from typing import List, Dict, Any
 
 from core.contracts.skill import Plan, PlanStep, JarvisSkill
@@ -7,11 +9,76 @@ from core.contracts.risk import RISK_LEVEL_R1
 from core.utils.ids import generate_id
 
 
+def _make_json_safe(value: Any) -> Any:
+    """将值转换为 JSON-safe 类型。
+    
+    Args:
+        value: 要转换的值
+        
+    Returns:
+        JSON-safe 的值（dict/list/str/int/float/bool/None）
+    """
+    if value is None:
+        return None
+    elif isinstance(value, (str, int, float, bool)):
+        return value
+    elif isinstance(value, dict):
+        return {k: _make_json_safe(v) for k, v in value.items()}
+    elif isinstance(value, (list, tuple)):
+        return [_make_json_safe(item) for item in value]
+    else:
+        # 对于其他类型，尝试转换为字符串
+        try:
+            # 先尝试 JSON 序列化测试
+            json.dumps(value)
+            return value
+        except (TypeError, ValueError):
+            # 如果无法序列化，转换为字符串并记录警告
+            warnings.warn(
+                f"Value of type {type(value).__name__} cannot be JSON-serialized, "
+                f"converting to string: {str(value)[:100]}",
+                UserWarning
+            )
+            return str(value)
+
+
+def step_to_dict(step: PlanStep) -> Dict[str, Any]:
+    """将 PlanStep 转换为字典（JSON-safe）。
+    
+    Args:
+        step: PlanStep 对象
+        
+    Returns:
+        包含所有字段的字典
+    """
+    step_dict = {
+        "step_id": step.step_id,
+        "tool_id": step.tool_id,
+        "description": step.description,
+        "risk_level": step.risk_level,
+    }
+    
+    # 处理 params，确保 JSON-safe
+    if step.params is not None:
+        step_dict["params"] = _make_json_safe(step.params)
+    else:
+        step_dict["params"] = {}
+    
+    return step_dict
+
+
 def plan_to_dict(plan: Plan) -> Dict[str, Any]:
-    """将计划转换为字典。"""
+    """将计划转换为字典（JSON-safe）。
+    
+    Args:
+        plan: Plan 对象
+        
+    Returns:
+        纯 dict/list/str/int/bool/None 结构的字典
+    """
     return {
         "plan_id": plan.plan_id,
-        "steps": plan.steps,
+        "steps": [step_to_dict(step) for step in plan.steps],
         "estimated_duration": plan.estimated_duration,
         "source": plan.source,
     }
