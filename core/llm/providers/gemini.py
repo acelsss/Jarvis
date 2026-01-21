@@ -48,17 +48,17 @@ class GeminiClient(LLMClient):
 
         system_text = "\n".join(
             [
-                "You are a JSON-only assistant.",
-                "Output ONLY a valid JSON object, no markdown or extra text.",
-                f"Purpose: {purpose}",
-                f"System instructions: {system}",
-                f"Schema hint: {schema_hint}",
+                "你是仅输出 JSON 的助手。",
+                "只输出有效 JSON 对象，不要输出 Markdown 或额外文本。",
+                f"目的: {purpose}",
+                f"系统指令: {system}",
+                f"Schema 提示: {schema_hint}",
             ]
         )
         user_text = "\n".join(
             [
                 user,
-                "Reminder: output ONLY JSON.",
+                "提醒：只输出 JSON。",
             ]
         )
 

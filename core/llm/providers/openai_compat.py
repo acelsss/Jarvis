@@ -50,17 +50,17 @@ class OpenAICompatibleClient(LLMClient):
 
         system_content = "\n".join(
             [
-                "You are a JSON-only assistant.",
-                "Output ONLY a valid JSON object, no markdown or extra text.",
-                f"Purpose: {purpose}",
-                f"System instructions: {system}",
-                f"Schema hint: {schema_hint}",
+                "你是仅输出 JSON 的助手。",
+                "只输出有效 JSON 对象，不要输出 Markdown 或额外文本。",
+                f"目的: {purpose}",
+                f"系统指令: {system}",
+                f"Schema 提示: {schema_hint}",
             ]
         )
         user_content = "\n".join(
             [
                 user,
-                "Reminder: output ONLY JSON.",
+                "提醒：只输出 JSON。",
             ]
         )
 
@@ -73,7 +73,11 @@ class OpenAICompatibleClient(LLMClient):
             "temperature": 0.2,
         }
 
-        url = f"{base_url.rstrip('/')}/v1/chat/completions"
+        base_url = base_url.rstrip("/")
+        if base_url.endswith("/api/paas/v4"):
+            url = f"{base_url}/chat/completions"
+        else:
+            url = f"{base_url}/v1/chat/completions"
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             url,

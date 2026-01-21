@@ -43,15 +43,15 @@ def handle_qa(
     provider = os.getenv("LLM_PROVIDER", "unknown")
     system = "\n".join(
         [
-            "You are a helpful assistant for QA.",
-            "Return JSON ONLY with an 'answer' field.",
+            "你是用于问答的助手。",
+            "只返回包含 answer 字段的 JSON。",
             "Schema: {\"answer\": \"string\"}",
         ]
     )
     user = "\n".join(
         [
-            f"User input: {task_text}",
-            "Context summary JSON (may be empty):",
+            f"用户输入: {task_text}",
+            "上下文摘要 JSON（可能为空）:",
             str(context_bundle) if context_bundle is not None else "{}",
         ]
     )

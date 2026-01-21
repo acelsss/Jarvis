@@ -246,18 +246,18 @@ def route_llm_first(
     context_summary = _build_context_summary(context_bundle)
     system = "\n".join(
         [
-            "You are a routing assistant.",
-            "Return JSON ONLY using the RouteDecision schema.",
+            "你是路由助手。",
+            "只返回符合 RouteDecision schema 的 JSON。",
             f"RouteDecision schema: {ROUTE_SCHEMA_V0_2}",
-            f"Capability index fields: {CAPABILITY_INDEX_SCHEMA_HINT}",
-            "Capability index (summary JSON):",
+            f"能力索引字段: {CAPABILITY_INDEX_SCHEMA_HINT}",
+            "能力索引（摘要 JSON）:",
             json.dumps(truncated_index, ensure_ascii=False),
         ]
     )
     user = "\n".join(
         [
-            f"User input: {task_text}",
-            "Important context summary JSON:",
+            f"用户输入: {task_text}",
+            "重要上下文摘要 JSON:",
             json.dumps(context_summary, ensure_ascii=False),
         ]
     )
@@ -378,19 +378,19 @@ def route_task(
             tools_summary = _summarize_tools(available_tools)
             system = "\n".join(
                 [
-                    "You are a routing assistant.",
-                    "Choose ONE route: skill or tools.",
-                    "Return JSON ONLY.",
-                    "Available skills (summary JSON):",
+                    "你是路由助手。",
+                    "只选择一种路由：skill 或 tools。",
+                    "只返回 JSON。",
+                    "可用技能（摘要 JSON）:",
                     json.dumps(skills_summary, ensure_ascii=False),
-                    "Available tools (summary JSON):",
+                    "可用工具（摘要 JSON）:",
                     json.dumps(tools_summary, ensure_ascii=False),
                 ]
             )
             user = "\n".join(
                 [
-                    f"Task description: {task.description}",
-                    "Decide best route using available skills/tools only.",
+                    f"任务描述: {task.description}",
+                    "仅使用提供的技能/工具做出最合适的路由选择。",
                 ]
             )
             llm_result = llm_client.complete_json(

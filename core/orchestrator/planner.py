@@ -227,19 +227,19 @@ class Planner:
                 tools_summary = self._summarize_tools(available_tools)
                 system = "\n".join(
                     [
-                        "You are a planning assistant.",
-                        "Return JSON ONLY with steps and notes.",
-                        "Use ONLY provided tool_ids.",
-                        "Ensure 2-5 steps if possible.",
-                        "If available, include at least one file tool step.",
-                        "Available tools (summary JSON):",
+                        "你是规划助手。",
+                        "只返回包含 steps 与 notes 的 JSON。",
+                        "仅使用提供的 tool_ids。",
+                        "尽量生成 2-5 个步骤。",
+                        "如可用，请至少包含一个 file 工具步骤。",
+                        "可用工具（摘要 JSON）:",
                         json.dumps(tools_summary, ensure_ascii=False),
                     ]
                 )
                 user = "\n".join(
                     [
-                        f"Task description: {task.description}",
-                        "Plan steps with tool_id, params, risk_level (R0-R3), description.",
+                        f"任务描述: {task.description}",
+                        "请规划步骤，包含 tool_id、params、risk_level（R0-R3）与 description。",
                     ]
                 )
                 llm_result = llm_client.complete_json(
