@@ -52,6 +52,28 @@ python -m apps.cli.main "创建一个测试文件"
 - `identity_pack/preferences.yaml` - 配置 sandbox_root 等参数
 - `.env` - 环境变量（可选，支持 SANDBOX_ROOT）
 
+## LLM 配置
+
+LLM 用于“路由/规划”阶段的智能补充，执行仍严格走审批与审计流程；未配置 key 也可正常运行。
+
+### OpenAI-Compatible（含国内兼容服务）
+
+- 设置 `LLM_PROVIDER=openai`
+- 配置 `OPENAI_API_KEY`
+- 国内兼容服务：修改 `OPENAI_BASE_URL` 指向对应服务地址
+- 可选设置 `OPENAI_MODEL`
+
+### Gemini
+
+- 设置 `LLM_PROVIDER=gemini`
+- 配置 `GEMINI_API_KEY`
+- 可选设置 `GEMINI_MODEL`
+
+### 开关说明
+
+- `LLM_ENABLE_ROUTER=1` 启用 LLM 路由（规则优先）
+- `LLM_ENABLE_PLANNER=1` 启用 LLM 规划（JSON 步骤结构）
+
 ## 示例运行输出
 
 见下方示例。
