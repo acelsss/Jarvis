@@ -135,4 +135,6 @@ Thumbs.db
 
 # Project specific
 memory/raw_logs/*.jsonl
+memory/task_db/*.jsonl
 sandbox/sandbox/*.txt
+*.bak
