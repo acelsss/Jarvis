@@ -2,6 +2,7 @@
 import warnings
 from pathlib import Path
 from typing import Dict, Optional, List, Any
+import yaml
 
 from core.contracts.skill import JarvisSkill
 from core.platform.config import Config
@@ -113,6 +114,106 @@ class SkillsRegistry:
     def list_all(self) -> Dict[str, JarvisSkill]:
         """列出所有技能。"""
         return self.skills.copy()
+
+    def _load_frontmatter(self, skill_md_path: Path) -> Dict[str, Any]:
+        """仅读取 YAML frontmatter，避免读取全文。"""
+        try:
+            with skill_md_path.open("r", encoding="utf-8") as handle:
+                first_line = handle.readline()
+                if not first_line.strip().startswith("---"):
+                    return {}
+
+                yaml_lines: List[str] = []
+                for line in handle:
+                    if line.strip() == "---":
+                        break
+                    yaml_lines.append(line)
+
+            if not yaml_lines:
+                return {}
+            return yaml.safe_load("".join(yaml_lines)) or {}
+        except Exception as exc:
+            print(f"读取 frontmatter 失败 {skill_md_path}: {exc}")
+            return {}
+
+    def _normalize_skill_metadata(
+        self,
+        skill_id: str,
+        metadata: Dict[str, Any],
+        skill_dir: Path,
+    ) -> Dict[str, Any]:
+        name = metadata.get("name") or skill_id
+        description = metadata.get("description") or ""
+        tags = metadata.get("tags", [])
+        if isinstance(tags, str):
+            tags = [tags]
+
+        allowed_tools = (
+            metadata.get("allowed_tools")
+            or metadata.get("allowed-tools")
+            or []
+        )
+        if isinstance(allowed_tools, str):
+            allowed_tools = [allowed_tools]
+
+        disable_model_invocation = (
+            metadata.get("disable_model_invocation")
+            if "disable_model_invocation" in metadata
+            else metadata.get("disable-model-invocation", False)
+        )
+
+        return {
+            "id": skill_id,
+            "name": name,
+            "description": description,
+            "tags": tags,
+            "allowed_tools": allowed_tools,
+            "disable_model_invocation": bool(disable_model_invocation),
+            "path": skill_dir.as_posix(),
+        }
+
+    def _metadata_from_skill(self, skill: JarvisSkill) -> Dict[str, Any]:
+        return self._normalize_skill_metadata(
+            skill.skill_id,
+            {
+                "name": skill.name,
+                "description": skill.description,
+                "tags": skill.tags,
+                **(skill.metadata or {}),
+            },
+            Path(skill.file_path).parent if skill.file_path else self.workspace_dir / skill.skill_id,
+        )
+
+    def list_skill_metadata(self) -> List[Dict[str, Any]]:
+        """列出技能元信息（只读 frontmatter，不读全文）。"""
+        if self.skills:
+            return [self._metadata_from_skill(skill) for skill in self.skills.values()]
+
+        results: List[Dict[str, Any]] = []
+        if not self.workspace_dir.exists():
+            return results
+
+        for skill_dir in self.workspace_dir.iterdir():
+            if not skill_dir.is_dir():
+                continue
+
+            skill_id = skill_dir.name
+            skill_md_path = skill_dir / "SKILL.md"
+            if skill_md_path.exists():
+                metadata = self._load_frontmatter(skill_md_path)
+                results.append(self._normalize_skill_metadata(skill_id, metadata, skill_dir))
+                continue
+
+            # 非 SKILL.md 结构：尝试从已注册技能中提取，缺失则默认
+            existing = self.skills.get(skill_id)
+            if existing:
+                results.append(self._metadata_from_skill(existing))
+            else:
+                results.append(
+                    self._normalize_skill_metadata(skill_id, {}, skill_dir)
+                )
+
+        return results
     
     def search_by_tags(self, tags: List[str]) -> List[JarvisSkill]:
         """根据标签搜索技能。

@@ -106,6 +106,20 @@ class ToolRegistry:
                 for tool_id, tool in self.tools.items()
                 if ":" not in tool_id
             }
+
+    def list_tools_summary(self, include_namespace: bool = False) -> List[Dict[str, str]]:
+        """列出工具摘要（用于 capability index）。"""
+        tools = self.list_all(include_namespace=include_namespace)
+        summaries: List[Dict[str, str]] = []
+        for tool_id, tool in tools.items():
+            summaries.append(
+                {
+                    "id": tool_id,
+                    "description": tool.description or "",
+                    "risk_default": getattr(tool, "risk_level", "R1"),
+                }
+            )
+        return summaries
     
     def list_namespace(self, namespace: str) -> Dict[str, Tool]:
         """列出指定命名空间的所有工具。
