@@ -42,20 +42,8 @@ class SkillsRegistry:
                 if adapter_name == "claude_code":
                     self.adapters.append(ClaudeCodeAdapter())
                 elif adapter_name == "agentskills":
-                    # agentskills 是 stub，优雅跳过并给出 warn
+                    # Agent Skills 标准适配器（已实现完整支持）
                     adapter = AgentSkillsAdapter()
-                    # 检查是否是 stub：检查 parse_skill_file 方法的文档字符串
-                    # v0.1 中 agentskills 是 stub，总是返回 None
-                    import inspect
-                    doc = inspect.getdoc(adapter.parse_skill_file) or ""
-                    # 如果文档中包含 "占位" 或 "stub"，认为是 stub
-                    if "占位" in doc or "stub" in doc.lower() or "TODO" in doc:
-                        warnings.warn(
-                            f"Adapter 'agentskills' is a stub and not fully implemented. "
-                            f"Skipping agent skills adapter loading.",
-                            UserWarning
-                        )
-                        continue
                     self.adapters.append(adapter)
                 else:
                     warnings.warn(
@@ -72,6 +60,40 @@ class SkillsRegistry:
         if not self.adapters:
             self.adapters.append(ClaudeCodeAdapter())
     
+    def _discover_skill_files(self, skill_dir: Path) -> Dict[str, Path]:
+        """发现技能目录中的支持文件。
+        
+        Args:
+            skill_dir: 技能目录路径
+            
+        Returns:
+            文件类型到路径的映射（如 {'scripts': [...], 'references': [...]}）
+        """
+        discovered = {
+            'scripts': [],
+            'references': [],
+            'assets': [],
+            'other_md': [],
+        }
+        
+        if not skill_dir.exists():
+            return discovered
+        
+        # 扫描常见子目录
+        for subdir_name in ['scripts', 'references', 'assets']:
+            subdir = skill_dir / subdir_name
+            if subdir.exists() and subdir.is_dir():
+                for file_path in subdir.rglob('*'):
+                    if file_path.is_file():
+                        discovered[subdir_name].append(file_path)
+        
+        # 扫描技能目录根目录下的其他Markdown文件（除了SKILL.md）
+        for file_path in skill_dir.iterdir():
+            if file_path.is_file() and file_path.suffix == '.md' and file_path.name != 'SKILL.md':
+                discovered['other_md'].append(file_path)
+        
+        return discovered
+
     def scan_workspace(self, load_fulltext: bool = False) -> None:
         """扫描工作空间目录，加载所有技能。"""
         if not self.workspace_dir.exists():
@@ -89,14 +111,14 @@ class SkillsRegistry:
                     # 尝试使用所有适配器解析技能文件
                     jarvis_skill = None
                     for adapter in self.adapters:
-                        # 尝试使用 parse_skill_md 方法（claude_code）
-                        if hasattr(adapter, "parse_skill_md"):
-                            jarvis_skill = adapter.parse_skill_md(str(skill_md_path))
+                        # 优先尝试 parse_skill_file 方法（Agent Skills 标准）
+                        if hasattr(adapter, "parse_skill_file"):
+                            jarvis_skill = adapter.parse_skill_file(str(skill_md_path))
                             if jarvis_skill:
                                 break
-                        # 尝试使用 parse_skill_file 方法（agentskills）
-                        elif hasattr(adapter, "parse_skill_file"):
-                            jarvis_skill = adapter.parse_skill_file(str(skill_md_path))
+                        # 回退到 parse_skill_md 方法（Claude Code 风格）
+                        elif hasattr(adapter, "parse_skill_md"):
+                            jarvis_skill = adapter.parse_skill_md(str(skill_md_path))
                             if jarvis_skill:
                                 break
                 else:
@@ -119,6 +141,17 @@ class SkillsRegistry:
                     )
                 
                 if jarvis_skill:
+                    # 发现技能目录中的支持文件
+                    discovered_files = self._discover_skill_files(skill_dir)
+                    if discovered_files:
+                        # 将发现的文件信息添加到metadata中
+                        jarvis_skill.metadata['discovered_files'] = {
+                            'scripts': [str(f) for f in discovered_files['scripts']],
+                            'references': [str(f) for f in discovered_files['references']],
+                            'assets': [str(f) for f in discovered_files['assets']],
+                            'other_md': [str(f) for f in discovered_files['other_md']],
+                        }
+                    
                     self.skills[jarvis_skill.skill_id] = jarvis_skill
                     print(f"已加载技能: {jarvis_skill.name} ({jarvis_skill.skill_id})")
     
@@ -234,24 +267,170 @@ class SkillsRegistry:
 
         return results
 
-    def load_skill_fulltext(self, skill_id: str) -> str:
-        """加载指定技能的完整说明文本。"""
+    def _parse_file_references(self, content: str, skill_dir: Path) -> List[str]:
+        """解析内容中引用的Markdown文件。
+        
+        Args:
+            content: SKILL.md的内容
+            skill_dir: 技能目录路径
+            
+        Returns:
+            引用的文件路径列表（绝对路径字符串）
+        """
+        import re
+        referenced_files = []
+        seen_paths = set()
+        
+        # 匹配常见的文件引用模式：
+        # - "see reference.md"
+        # - "read forms.md"
+        # - "see reference.md and forms.md"
+        # - "For details, see reference.md"
+        # - "参考 reference.md"
+        # - "see reference.md, forms.md"
+        patterns = [
+            r'(?:see|read|参考|查看|see also|refer to|check|follow)\s+([a-zA-Z0-9_\-/]+\.md)',
+            r'([a-zA-Z0-9_\-/]+\.md)(?:\s+and\s+([a-zA-Z0-9_\-/]+\.md))?',
+            r'follow\s+the\s+instructions\s+in\s+([a-zA-Z0-9_\-/]+\.md)',
+            r'([a-zA-Z0-9_\-/]+\.md)(?:\s*,\s*([a-zA-Z0-9_\-/]+\.md))?',
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                for group in match.groups():
+                    if group and group.endswith('.md'):
+                        # 处理相对路径
+                        if '/' in group:
+                            file_path = skill_dir / group
+                        else:
+                            file_path = skill_dir / group
+                        
+                        # 标准化路径并检查是否存在
+                        file_path = file_path.resolve()
+                        if file_path.exists() and str(file_path) not in seen_paths:
+                            referenced_files.append(str(file_path))
+                            seen_paths.add(str(file_path))
+        
+        # 也检查技能目录中常见的文件（如果内容中提到了）
+        common_files = ['reference.md', 'references.md', 'forms.md', 'guide.md', 'tutorial.md', 'README.md']
+        for filename in common_files:
+            file_path = skill_dir / filename
+            if file_path.exists():
+                file_path = file_path.resolve()
+                # 检查内容中是否提到了这个文件（文件名或去掉扩展名）
+                filename_base = filename.replace('.md', '')
+                if (filename.lower() in content.lower() or 
+                    filename_base.lower() in content.lower()):
+                    if str(file_path) not in seen_paths:
+                        referenced_files.append(str(file_path))
+                        seen_paths.add(str(file_path))
+        
+        return referenced_files
+
+    def load_skill_fulltext(self, skill_id: str, include_references: bool = False) -> str:
+        """加载指定技能的完整说明文本。
+        
+        根据 Anthropic Agent Skills 的渐进式加载原则：
+        - 默认只加载 SKILL.md 主文件（第二层）
+        - SKILL.md 中已经包含了引用文件的提示（如 "see reference.md"）
+        - LLM 可以根据 SKILL.md 中的提示，在需要时通过文件工具读取引用文件
+        - 这符合渐进式加载的第三层：按需加载
+        
+        Args:
+            skill_id: 技能ID
+            include_references: 是否自动加载引用的文件内容（默认False，符合渐进式加载原则）
+                              - False: 只返回 SKILL.md（推荐，符合标准）
+                              - True: 返回 SKILL.md + 所有引用文件内容（向后兼容）
+            
+        Returns:
+            技能说明文本
+        """
         # 优先读取 SKILL.md 全文
         skill_dir = self.workspace_dir / skill_id
         skill_md_path = skill_dir / "SKILL.md"
+        
+        main_content = ""
         if skill_md_path.exists():
-            return skill_md_path.read_text(encoding="utf-8")
-
-        skill = self.skills.get(skill_id)
-        if skill:
-            if skill.instructions_md:
-                return skill.instructions_md
-            if skill.file_path:
-                path = Path(skill.file_path)
-                if path.exists():
-                    return path.read_text(encoding="utf-8")
-
-        return ""
+            main_content = skill_md_path.read_text(encoding="utf-8")
+        else:
+            skill = self.skills.get(skill_id)
+            if skill:
+                if skill.instructions_md:
+                    main_content = skill.instructions_md
+                elif skill.file_path:
+                    path = Path(skill.file_path)
+                    if path.exists():
+                        main_content = path.read_text(encoding="utf-8")
+        
+        if not main_content:
+            return ""
+        
+        # 根据渐进式加载原则：默认不自动加载引用文件
+        # SKILL.md 中已经包含了引用提示（如 "see reference.md"）
+        # LLM 可以根据需要决定是否读取这些文件
+        if not include_references:
+            return main_content
+        
+        # 向后兼容：如果明确要求加载引用文件，则加载
+        # 解析并加载引用的文件
+        referenced_files = self._parse_file_references(main_content, skill_dir)
+        
+        if not referenced_files:
+            return main_content
+        
+        # 构建完整内容：主文件 + 引用的文件
+        full_content = [main_content]
+        full_content.append("\n\n---\n\n## 引用的参考文件\n\n")
+        
+        for ref_file_path in referenced_files:
+            try:
+                ref_path = Path(ref_file_path)
+                if ref_path.exists():
+                    ref_content = ref_path.read_text(encoding="utf-8")
+                    # 提取文件名（不含路径）
+                    filename = ref_path.name
+                    full_content.append(f"### {filename}\n\n")
+                    full_content.append(ref_content)
+                    full_content.append("\n\n---\n\n")
+            except Exception as e:
+                # 如果加载引用文件失败，记录警告但继续
+                print(f"警告: 无法加载引用文件 {ref_file_path}: {e}")
+        
+        return "".join(full_content)
+    
+    def list_skill_references(self, skill_id: str) -> List[Dict[str, str]]:
+        """列出技能的引用文件信息（不加载内容）。
+        
+        Args:
+            skill_id: 技能ID
+            
+        Returns:
+            引用文件列表，每个元素包含 'name' 和 'path'
+        """
+        skill_dir = self.workspace_dir / skill_id
+        skill_md_path = skill_dir / "SKILL.md"
+        
+        if not skill_md_path.exists():
+            return []
+        
+        main_content = skill_md_path.read_text(encoding="utf-8")
+        referenced_files = self._parse_file_references(main_content, skill_dir)
+        
+        references = []
+        for ref_file_path in referenced_files:
+            try:
+                ref_path = Path(ref_file_path)
+                if ref_path.exists():
+                    references.append({
+                        'name': ref_path.name,
+                        'path': str(ref_path.relative_to(skill_dir)),
+                        'full_path': str(ref_path),
+                    })
+            except Exception:
+                pass
+        
+        return references
     
     def search_by_tags(self, tags: List[str]) -> List[JarvisSkill]:
         """根据标签搜索技能。

@@ -2,7 +2,17 @@
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Optional
+
+try:
+    from dotenv import load_dotenv
+    # 加载 .env 文件
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    pass  # python-dotenv 未安装时忽略
 
 from core.contracts.task import (
     TASK_STATUS_NEW,
@@ -129,10 +139,13 @@ async def main():
                 step.risk_level = min_risk
 
     def _load_skill_fulltext(skill_id: str) -> str:
-        fulltext = skills_registry.load_skill_fulltext(skill_id)
+        # 根据渐进式加载原则：只加载 SKILL.md，不自动加载引用文件
+        # LLM 可以根据 SKILL.md 中的提示，在需要时通过文件工具读取引用文件
+        fulltext = skills_registry.load_skill_fulltext(skill_id, include_references=False)
         audit_logger.log("skill.loaded", {
             "skill_id": skill_id,
             "bytes_loaded": len(fulltext.encode("utf-8")),
+            "progressive_disclosure": True,  # 标记使用了渐进式加载
         })
         return fulltext
 
@@ -176,7 +189,9 @@ async def main():
                     matched_skill, routed_tools = route_task(task, available_tools, available_skills)
                 else:
                     skill_fulltext = _load_skill_fulltext(matched_skill.skill_id)
-                    use_planner_for_skill = True
+                    # 如果启用了 LLM planner，使用 LLM 来生成计划（能理解技能文档并生成实际内容）
+                    # 否则使用 skill_to_plan（解析执行步骤但只能生成占位文件）
+                    use_planner_for_skill = llm_planner_enabled
             elif route_type in ("tool", "mcp"):
                 tool_ids = route_decision.get("tool_ids") or []
                 routed_tools = [
@@ -226,14 +241,15 @@ async def main():
     if matched_skill:
         if not skill_fulltext:
             skill_fulltext = _load_skill_fulltext(matched_skill.skill_id)
-        if use_planner_for_skill:
-            # 选中 skill 后，注入技能全文再规划
+        # 如果启用了 LLM planner，优先使用 LLM 来生成计划（能理解技能文档并生成实际内容）
+        # 否则使用 skill_to_plan（解析执行步骤但只能生成占位文件）
+        if llm_planner_enabled and llm_client:
             plan = await planner.create_plan(
                 task,
                 available_tools,
                 routed_tools,
                 skill_fulltext=skill_fulltext,
-                llm_client=llm_client if llm_planner_enabled else None,
+                llm_client=llm_client,
                 audit_logger=audit_logger,
             )
             plan.source = f"skill:{matched_skill.skill_id}"

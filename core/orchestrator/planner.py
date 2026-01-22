@@ -244,6 +244,18 @@ class Planner:
                         "仅使用提供的 tool_ids。",
                         "尽量生成 2-5 个步骤。",
                         "如可用，请至少包含一个 file 工具步骤。",
+                        "",
+                        "重要：对于 file 工具，支持以下操作：",
+                        '  - "operation": "write" - 写入文件',
+                        '    params: {"operation": "write", "path": "文件路径", "content": "文件内容"}',
+                        '  - "operation": "read" - 读取文件（可用于读取技能引用文件）',
+                        '    params: {"operation": "read", "path": "文件路径"}',
+                        '  - "operation": "list" - 列出目录内容',
+                        '    params: {"operation": "list", "path": "目录路径"}',
+                        "",
+                        "如果技能文档中提到了引用文件（如 references/workflows.md），",
+                        "你可以在计划中添加 file.read 步骤来读取这些文件。",
+                        "",
                         "可用工具（摘要 JSON）:",
                         json.dumps(tools_summary, ensure_ascii=False),
                     ]
@@ -263,12 +275,20 @@ class Planner:
                             skill_fulltext,
                         ]
                     )
-                llm_result = llm_client.complete_json(
-                    purpose="plan",
-                    system=system,
-                    user=user,
-                    schema_hint=PLAN_SCHEMA,
-                )
+                try:
+                    llm_result = llm_client.complete_json(
+                        purpose="plan",
+                        system=system,
+                        user=user,
+                        schema_hint=PLAN_SCHEMA,
+                    )
+                except Exception as json_err:
+                    print(f"LLM 返回的 JSON 解析失败: {json_err}")
+                    if os.getenv("DEBUG") == "1":
+                        import traceback
+                        traceback.print_exc()
+                    raise
+                
                 if isinstance(llm_result, dict):
                     raw_steps = llm_result.get("steps") or []
                     notes = llm_result.get("notes", "")
@@ -312,7 +332,10 @@ class Planner:
                         )
                         self._log_llm_plan(audit_logger, provider, steps, notes)
                         return plan
-            except Exception:
-                print("LLM 规划不可用，已回退默认规划。")
+            except Exception as e:
+                import traceback
+                print(f"LLM 规划不可用，已回退默认规划。错误: {e}")
+                if os.getenv("DEBUG") == "1":
+                    traceback.print_exc()
 
         return self._create_rule_plan(task, available_tools, routed_tools)
