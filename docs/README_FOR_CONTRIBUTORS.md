@@ -118,6 +118,12 @@ version: 0.1
 
 如果 skill 需要执行 Python 脚本，可以使用 `python_run` 工具。
 
+**约定（必须遵守）**：
+- **脚本位置**：skill 如需可执行脚本，必须放在 `skill_dir/scripts/` 目录下
+- **执行工具**：统一使用 `python_run` 工具执行脚本
+- **工作目录**：执行时 `cwd` 强制为 `sandbox/` 根目录
+- **产物位置**：脚本产生的文件必须写到 `sandbox/` 目录下（如 `sandbox/outputs/`）
+
 **限制**：
 - 脚本必须放在以下位置之一：
   - `skills_workspace/<skill-name>/scripts/*.py`
@@ -125,6 +131,11 @@ version: 0.1
 - 脚本路径会经过 `realpath` 校验，防止路径逃逸
 - 执行时 `cwd` 强制为 `sandbox/` 根目录
 - 风险等级 R2（需要用户审批）
+
+**元数据暴露**：
+- `SkillsRegistry.list_skill_metadata()` 会自动扫描 `scripts/` 目录
+- 脚本信息会包含在 capability index 中，供 LLM 路由和规划使用
+- 只暴露脚本文件名和相对路径，不加载脚本内容（保持 progressive disclosure）
 
 **示例**：
 

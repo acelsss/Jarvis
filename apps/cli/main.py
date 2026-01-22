@@ -39,6 +39,7 @@ from tools.runner import ToolRunner
 from tools.local.shell_tool import ShellTool
 from tools.local.file_tool import FileTool
 from tools.python_run import PythonRunTool
+from pathlib import Path
 from skills.registry import SkillsRegistry
 from skills.runtime.to_plan import skill_to_plan
 
@@ -96,6 +97,16 @@ async def main():
                 print(f"  标签: {', '.join(skill.tags) if skill.tags else '无'}")
                 if skill.file_path:
                     print(f"  路径: {skill.file_path}")
+                # 显示脚本列表（如果有）
+                if skill.metadata and 'discovered_files' in skill.metadata:
+                    scripts = skill.metadata['discovered_files'].get('scripts', [])
+                    if scripts:
+                        print(f"  脚本: {len(scripts)} 个")
+                        for script_path in scripts[:5]:  # 最多显示 5 个
+                            script_name = Path(script_path).name
+                            print(f"    - {script_name}")
+                        if len(scripts) > 5:
+                            print(f"    ... 还有 {len(scripts) - 5} 个脚本")
         print("\n" + "=" * 60)
         return
     

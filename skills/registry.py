@@ -188,6 +188,37 @@ class SkillsRegistry:
             print(f"读取 frontmatter 失败 {skill_md_path}: {exc}")
             return {}
 
+    def _scan_skill_scripts(self, skill_dir: Path) -> List[Dict[str, str]]:
+        """扫描技能目录下的 scripts/*.py 文件。
+        
+        Args:
+            skill_dir: 技能目录路径
+            
+        Returns:
+            脚本列表，每个元素包含 name 和 relative_path
+        """
+        scripts = []
+        scripts_dir = skill_dir / "scripts"
+        
+        if not scripts_dir.exists() or not scripts_dir.is_dir():
+            return scripts
+        
+        # 只扫描 scripts/ 目录下的 .py 文件（不递归）
+        for file_path in scripts_dir.iterdir():
+            if file_path.is_file() and file_path.suffix == ".py":
+                # 计算相对路径（相对于技能目录）
+                try:
+                    relative_path = file_path.relative_to(skill_dir)
+                    scripts.append({
+                        "name": file_path.name,
+                        "relative_path": str(relative_path),
+                    })
+                except ValueError:
+                    # 如果无法计算相对路径，跳过
+                    continue
+        
+        return scripts
+
     def _normalize_skill_metadata(
         self,
         skill_id: str,
@@ -214,6 +245,9 @@ class SkillsRegistry:
             else metadata.get("disable-model-invocation", False)
         )
 
+        # 扫描 scripts 目录
+        scripts = self._scan_skill_scripts(skill_dir)
+
         return {
             "id": skill_id,
             "name": name,
@@ -222,6 +256,7 @@ class SkillsRegistry:
             "allowed_tools": allowed_tools,
             "disable_model_invocation": bool(disable_model_invocation),
             "path": skill_dir.as_posix(),
+            "scripts": scripts,
         }
 
     def _metadata_from_skill(self, skill: JarvisSkill) -> Dict[str, Any]:

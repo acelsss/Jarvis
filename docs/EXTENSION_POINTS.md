@@ -157,7 +157,25 @@ Jarvis 的历史资产包括：
 
 ---
 
-## 8. Checklist（扩展点自检清单）
+## 8. Skill Scripts 约定
+
+**脚本位置约定**：
+- Skill 如需可执行脚本，必须放在 `skill_dir/scripts/` 目录下
+- 只扫描 `scripts/` 目录下的 `.py` 文件（不递归子目录）
+- 脚本信息会在 `list_skill_metadata()` 中暴露，包含在 capability index 中
+
+**执行约定**：
+- 统一使用 `python_run` 工具执行脚本
+- 执行时 `cwd` 强制为 `sandbox/` 根目录
+- 脚本产生的文件必须写到 `sandbox/` 目录下（如 `sandbox/outputs/`）
+
+**Progressive Disclosure**：
+- 脚本信息（文件名和相对路径）会在元数据中暴露，供 LLM 路由和规划使用
+- 脚本内容不会被加载到元数据中，保持渐进式加载原则
+
+---
+
+## 9. Checklist（扩展点自检清单）
 
 当你要接入一个新能力（Tool/Skill/MCP/Desktop）时，请逐项确认：
 
