@@ -398,6 +398,14 @@ async def main():
             if step.tool_id == "python_run":
                 result = tool_result.result
                 meta = result.get("meta", {})
+                artifacts_changed = result.get("artifacts_changed", [])
+                artifacts_count = meta.get("artifacts_count", len(artifacts_changed))
+                
+                # 取前 20 个产物路径作为样本
+                artifacts_sample = [
+                    item["path"] for item in artifacts_changed[:20]
+                ]
+                
                 audit_logger.log("tool.python_run", {
                     "task_id": task.task_id,
                     "step_id": step.step_id,
@@ -409,6 +417,8 @@ async def main():
                     "stdout_len": len(result.get("stdout_excerpt", "")),
                     "stderr_len": len(result.get("stderr_excerpt", "")),
                     "duration_ms": meta.get("duration_ms", 0),
+                    "artifacts_count": artifacts_count,
+                    "artifacts_sample": artifacts_sample,
                 })
             else:
                 audit_logger.log("tool_executed", {
@@ -457,8 +467,27 @@ async def main():
     print(f"任务ID: {task.task_id}")
     print(f"状态: {task.status}")
     print(f"执行的工具: {', '.join(executed_tools) if executed_tools else '无'}")
+    
+    # 收集 python_run 工具的产物
+    python_run_artifacts = []
+    for action in task.actions:
+        if action.get("tool_id") == "python_run":
+            result = action.get("result", {})
+            artifacts = result.get("artifacts_changed", [])
+            python_run_artifacts.extend(artifacts)
+    
+    # 展示产物路径
     print(f"产物路径:")
-    if task.artifacts:
+    if python_run_artifacts:
+        # 优先展示 python_run 的产物（至少前 10 个）
+        print(f"  (python_run 工具，共 {len(python_run_artifacts)} 个):")
+        for i, artifact in enumerate(python_run_artifacts[:10], 1):
+            kind_icon = "➕" if artifact.get("kind") == "added" else "📝"
+            print(f"    {i}. {kind_icon} {artifact.get('path')} ({artifact.get('size', 0)} 字节)")
+        if len(python_run_artifacts) > 10:
+            print(f"    ... 还有 {len(python_run_artifacts) - 10} 个产物未显示")
+    elif task.artifacts:
+        # 其他工具的产物
         for artifact in task.artifacts:
             print(f"  - {artifact}")
     else:

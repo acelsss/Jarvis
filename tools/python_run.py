@@ -37,6 +37,12 @@ class PythonRunTool(Tool):
     # 默认超时（秒）
     DEFAULT_TIMEOUT = 60
     
+    # 产物差分：最多返回的文件数
+    MAX_ARTIFACTS = 200
+    
+    # 审计日志：最多展示的产物样本数
+    MAX_ARTIFACTS_SAMPLE = 20
+    
     def __init__(self, project_root: str = None, sandbox_root: str = None):
         """初始化 Python 执行工具。
         
@@ -223,6 +229,92 @@ class PythonRunTool(Tool):
         
         return text[:max_length] + f"\n... (截断，原始长度: {len(text)} 字符)"
     
+    def _snapshot_sandbox(self) -> Dict[str, tuple]:
+        """扫描 sandbox 目录，生成文件快照。
+        
+        Returns:
+            字典 {rel_path: (mtime_ns, size)}
+        """
+        snapshot = {}
+        
+        if not self.sandbox_root.exists():
+            return snapshot
+        
+        # 排除的目录和文件
+        excluded_names = {"memory", ".gitkeep", ".git"}
+        
+        try:
+            # 递归扫描 sandbox 目录
+            for file_path in self.sandbox_root.rglob("*"):
+                # 跳过排除的目录
+                if any(excluded in file_path.parts for excluded in excluded_names):
+                    continue
+                
+                # 只处理文件，跳过目录
+                if not file_path.is_file():
+                    continue
+                
+                try:
+                    # 计算相对路径
+                    rel_path = file_path.relative_to(self.sandbox_root)
+                    rel_path_str = str(rel_path)
+                    
+                    # 获取文件统计信息
+                    stat = file_path.stat()
+                    snapshot[rel_path_str] = (stat.st_mtime_ns, stat.st_size)
+                except (OSError, ValueError):
+                    # 忽略无法访问的文件
+                    continue
+        except Exception:
+            # 扫描失败时返回空快照
+            pass
+        
+        return snapshot
+    
+    def _diff_snapshots(
+        self, before: Dict[str, tuple], after: Dict[str, tuple]
+    ) -> Dict[str, Any]:
+        """计算两个快照之间的差分。
+        
+        Args:
+            before: 执行前的快照 {rel_path: (mtime_ns, size)}
+            after: 执行后的快照 {rel_path: (mtime_ns, size)}
+            
+        Returns:
+            差分结果字典
+        """
+        artifacts_changed = []
+        
+        # 找出新增和变更的文件
+        for rel_path, (mtime_ns, size) in after.items():
+            if rel_path not in before:
+                # 新增文件
+                artifacts_changed.append({
+                    "path": rel_path,
+                    "size": size,
+                    "kind": "added",
+                })
+            else:
+                # 检查是否变更
+                before_mtime, before_size = before[rel_path]
+                if mtime_ns != before_mtime or size != before_size:
+                    artifacts_changed.append({
+                        "path": rel_path,
+                        "size": size,
+                        "kind": "modified",
+                    })
+        
+        # 截断到最大数量
+        truncated = len(artifacts_changed) > self.MAX_ARTIFACTS
+        if truncated:
+            artifacts_changed = artifacts_changed[:self.MAX_ARTIFACTS]
+        
+        return {
+            "artifacts_changed": artifacts_changed,
+            "artifacts_count": len(artifacts_changed),
+            "truncated": truncated,
+        }
+    
     async def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """执行 Python 脚本。
         
@@ -258,6 +350,9 @@ class PythonRunTool(Tool):
         if allowed_env:
             exec_env.update(allowed_env)
         
+        # 执行前快照
+        before_snapshot = self._snapshot_sandbox()
+        
         # 记录开始时间
         start_time = time.time()
         
@@ -275,6 +370,12 @@ class PythonRunTool(Tool):
             # 计算执行时间
             duration_ms = int((time.time() - start_time) * 1000)
             
+            # 执行后快照
+            after_snapshot = self._snapshot_sandbox()
+            
+            # 计算差分
+            diff_result = self._diff_snapshots(before_snapshot, after_snapshot)
+            
             # 截断输出
             stdout_excerpt = self._truncate_output(result.stdout)
             stderr_excerpt = self._truncate_output(result.stderr)
@@ -290,20 +391,29 @@ class PythonRunTool(Tool):
                 "exit_code": result.returncode,
                 "stdout_excerpt": stdout_excerpt,
                 "stderr_excerpt": stderr_excerpt,
+                "artifacts_changed": diff_result["artifacts_changed"],
                 "meta": {
                     "duration_ms": duration_ms,
                     "script_path": str(script_relative),
                     "args": args,
                     "cwd": str(self.sandbox_root),
                     "timeout_seconds": timeout_seconds,
+                    "artifacts_count": diff_result["artifacts_count"],
+                    "artifacts_truncated": diff_result["truncated"],
                 },
             }
             
         except subprocess.TimeoutExpired:
             duration_ms = int((time.time() - start_time) * 1000)
+            # 即使超时，也计算差分（可能部分执行产生了文件）
+            after_snapshot = self._snapshot_sandbox()
+            diff_result = self._diff_snapshots(before_snapshot, after_snapshot)
             raise TimeoutError(
                 f"脚本执行超时（{timeout_seconds} 秒）: {script_path}"
             )
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
+            # 即使失败，也计算差分（可能部分执行产生了文件）
+            after_snapshot = self._snapshot_sandbox()
+            diff_result = self._diff_snapshots(before_snapshot, after_snapshot)
             raise RuntimeError(f"脚本执行失败: {str(e)}")

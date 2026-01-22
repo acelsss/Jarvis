@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""测试脚本：打印一行并写入文件。"""
+"""测试脚本：打印一行并写入 2 个文件。"""
 import sys
+import json
 from pathlib import Path
 
 print("Hello from python_run tool!")
@@ -9,10 +10,15 @@ print("Hello from python_run tool!")
 output_dir = Path("outputs")
 output_dir.mkdir(parents=True, exist_ok=True)
 
-output_file = output_dir / "hello.txt"
-output_file.write_text("Hello from python_run tool!\n", encoding="utf-8")
+# 写入第一个文件：a.txt
+file_a = output_dir / "a.txt"
+file_a.write_text("This is file a.txt\n", encoding="utf-8")
+print(f"✓ 已写入文件: {file_a}")
 
-print(f"✓ 已写入文件: {output_file}")
+# 写入第二个文件：b.json
+file_b = output_dir / "b.json"
+file_b.write_text(json.dumps({"message": "This is file b.json", "status": "ok"}, indent=2), encoding="utf-8")
+print(f"✓ 已写入文件: {file_b}")
 
 # 如果有参数，也打印出来
 if len(sys.argv) > 1:
