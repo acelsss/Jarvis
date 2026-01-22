@@ -97,8 +97,8 @@ def dict_to_plan(data: Dict[str, Any]) -> Plan:
 def skill_to_plan(jarvis_skill: JarvisSkill, task_id: str, sandbox_root: str = "./sandbox") -> Plan:
     """将 JarvisSkill 的 instructions_md 转换为 Task plan。
     
-    v0.1 简单模板：将 instructions 分段转换为 PlanStep，默认风险 R1。
-    每个步骤都使用 file_tool 来保存中间结果。
+    解析技能文档中的"执行步骤"部分，生成实际的执行计划。
+    如果没有找到"执行步骤"，则回退到简单模板。
     
     Args:
         jarvis_skill: JarvisSkill 对象
@@ -111,71 +111,85 @@ def skill_to_plan(jarvis_skill: JarvisSkill, task_id: str, sandbox_root: str = "
     plan_id = generate_id("plan")
     steps: List[PlanStep] = []
     
-    # 解析 instructions_md，按段落分割
     instructions = jarvis_skill.instructions_md
     
-    # 按标题或空行分割段落
-    # 匹配 Markdown 标题（# 开头）或空行分隔的段落
-    paragraphs = re.split(r'\n\s*\n|\n(?=#)', instructions)
-    
-    # 过滤空段落
-    paragraphs = [p.strip() for p in paragraphs if p.strip()]
-    
-    # 为每个段落创建一个步骤（最多5个步骤）
-    for i, paragraph in enumerate(paragraphs[:5], 1):
-        # 提取段落标题（如果有）
-        title_match = re.match(r'^#+\s*(.+)$', paragraph, re.MULTILINE)
-        if title_match:
-            step_description = title_match.group(1)
-            # 移除标题行
-            content = re.sub(r'^#+\s*.+$', '', paragraph, flags=re.MULTILINE).strip()
-        else:
-            # 使用前50个字符作为描述
-            step_description = paragraph[:50].replace('\n', ' ').strip()
-            content = paragraph
-        
-        # 创建文件保存步骤内容
-        step = PlanStep(
-            step_id=generate_id("step"),
-            tool_id="file",
-            description=f"{jarvis_skill.name} - 步骤 {i}: {step_description}",
-            params={
-                "operation": "write",
-                "path": f"{sandbox_root}/{task_id}_skill_{jarvis_skill.skill_id}_step{i}.md",
-                "content": f"# {step_description}\n\n{content}\n\n---\n技能: {jarvis_skill.name}\n步骤: {i}/{len(paragraphs[:5])}",
-            },
-            risk_level=RISK_LEVEL_R1,
-        )
-        steps.append(step)
-    
-    # 如果步骤少于2个，至少创建一个总结文件
-    if len(steps) < 2:
-        summary_step = PlanStep(
-            step_id=generate_id("step"),
-            tool_id="file",
-            description=f"{jarvis_skill.name} - 生成总结文件",
-            params={
-                "operation": "write",
-                "path": f"{sandbox_root}/{task_id}_skill_{jarvis_skill.skill_id}_summary.md",
-                "content": f"# {jarvis_skill.name}\n\n{jarvis_skill.description}\n\n## 执行说明\n\n{jarvis_skill.instructions_md}",
-            },
-            risk_level=RISK_LEVEL_R1,
-        )
-        steps.append(summary_step)
-    
-    # 创建最终产物文件
-    final_step = PlanStep(
-        step_id=generate_id("step"),
-        tool_id="file",
-        description=f"{jarvis_skill.name} - 生成最终产物",
-        params={
-            "operation": "write",
-            "path": f"{sandbox_root}/{task_id}_skill_{jarvis_skill.skill_id}_final.md",
-            "content": f"# {jarvis_skill.name}\n\n任务ID: {task_id}\n技能ID: {jarvis_skill.skill_id}\n\n## 完整内容\n\n{jarvis_skill.instructions_md}",
-        },
-        risk_level=RISK_LEVEL_R1,
+    # 尝试解析"执行步骤"部分
+    execution_steps_match = re.search(
+        r'##\s*执行步骤\s*\n(.*?)(?=\n##|\Z)',
+        instructions,
+        re.DOTALL | re.IGNORECASE
     )
-    steps.append(final_step)
+    
+    if execution_steps_match:
+        execution_steps_text = execution_steps_match.group(1).strip()
+        # 解析编号列表（1. 2. 3. 等）
+        step_lines = re.findall(r'^\d+\.\s*(.+)$', execution_steps_text, re.MULTILINE)
+        
+        if step_lines:
+            # 根据执行步骤生成计划
+            for i, step_desc in enumerate(step_lines, 1):
+                # 检查步骤描述，确定使用什么工具
+                step_desc_lower = step_desc.lower()
+                
+                # 判断步骤类型
+                if "保存" in step_desc or "文件" in step_desc or "markdown" in step_desc_lower or "json" in step_desc_lower:
+                    # 文件保存步骤
+                    if "元数据" in step_desc or "meta" in step_desc_lower:
+                        file_path = f"{sandbox_root}/{task_id}_article_meta.json"
+                        file_content = json.dumps({
+                            "task_id": task_id,
+                            "skill_id": jarvis_skill.skill_id,
+                            "title": "",
+                            "summary": "",
+                            "word_count": 0,
+                            "created_at": ""
+                        }, ensure_ascii=False, indent=2)
+                    else:
+                        file_path = f"{sandbox_root}/{task_id}_article.md"
+                        file_content = f"# 文章标题\n\n## 摘要\n\n## 正文\n\n## 结尾\n\n---\n任务ID: {task_id}\n技能: {jarvis_skill.name}"
+                    
+                    step = PlanStep(
+                        step_id=generate_id("step"),
+                        tool_id="file",
+                        description=f"{jarvis_skill.name} - {step_desc}",
+                        params={
+                            "operation": "write",
+                            "path": file_path,
+                            "content": file_content,
+                        },
+                        risk_level=RISK_LEVEL_R1,
+                    )
+                else:
+                    # 其他步骤（分析、生成等），创建占位文件
+                    # 注意：这些步骤实际上需要 LLM 来执行，这里只是创建占位
+                    step = PlanStep(
+                        step_id=generate_id("step"),
+                        tool_id="file",
+                        description=f"{jarvis_skill.name} - {step_desc}",
+                        params={
+                            "operation": "write",
+                            "path": f"{sandbox_root}/{task_id}_skill_{jarvis_skill.skill_id}_step{i}.md",
+                            "content": f"# {step_desc}\n\n**注意**: 此步骤需要 LLM 支持才能执行。\n\n任务ID: {task_id}\n技能: {jarvis_skill.name}",
+                        },
+                        risk_level=RISK_LEVEL_R1,
+                    )
+                steps.append(step)
+    
+    # 如果没有找到执行步骤，回退到简单模板
+    if not steps:
+        # 创建最终产物文件
+        final_step = PlanStep(
+            step_id=generate_id("step"),
+            tool_id="file",
+            description=f"{jarvis_skill.name} - 生成最终产物",
+            params={
+                "operation": "write",
+                "path": f"{sandbox_root}/{task_id}_article.md",
+                "content": f"# {jarvis_skill.name}\n\n任务ID: {task_id}\n技能ID: {jarvis_skill.skill_id}\n\n**注意**: 此技能需要 LLM 支持才能生成实际内容。\n\n技能说明:\n{jarvis_skill.description}",
+            },
+            risk_level=RISK_LEVEL_R1,
+        )
+        steps.append(final_step)
     
     return Plan(
         plan_id=plan_id,

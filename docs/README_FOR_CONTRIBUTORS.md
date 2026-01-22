@@ -114,6 +114,51 @@ version: 0.1
 - 输入能触发 skill 匹配并生成 plan
 - plan 中至少一个步骤落地产物到 sandbox（便于闭环）
 
+### 2.6 如何在 skill 中使用 python_run（脚本放 scripts/，产物写到 sandbox/）
+
+如果 skill 需要执行 Python 脚本，可以使用 `python_run` 工具。
+
+**限制**：
+- 脚本必须放在以下位置之一：
+  - `skills_workspace/<skill-name>/scripts/*.py`
+  - `sandbox/scripts/*.py`
+- 脚本路径会经过 `realpath` 校验，防止路径逃逸
+- 执行时 `cwd` 强制为 `sandbox/` 根目录
+- 风险等级 R2（需要用户审批）
+
+**示例**：
+
+在 skill 的 SKILL.md 中，可以这样描述：
+
+```markdown
+## 执行步骤
+
+1. 使用 python_run 工具执行初始化脚本：
+   - tool_id: `python_run`
+   - params:
+     ```json
+     {
+       "script_path": "skills_workspace/my-skill/scripts/init.py",
+       "args": ["--output", "sandbox/outputs/result.txt"],
+       "timeout_seconds": 60
+     }
+     ```
+
+2. 脚本执行后，产物会写入 `sandbox/` 目录
+```
+
+**注意事项**：
+- 脚本执行时的工作目录（cwd）是 `sandbox/` 根目录
+- 脚本应该将输出文件写入 `sandbox/` 下的子目录（如 `sandbox/outputs/`）
+- 脚本路径使用相对路径（相对于项目根目录）
+- 超时时间默认 60 秒，上限 120 秒
+- stdout/stderr 会被截断到 2048 字符（避免日志爆炸）
+
+**审计日志**：
+- 所有 `python_run` 执行都会记录到 `audit.log.jsonl`
+- 事件类型：`tool.python_run`
+- 记录字段：`script_path_relative`, `args`, `cwd`, `timeout_seconds`, `exit_code`, `stdout_len`, `stderr_len`, `duration_ms`
+
 ---
 
 ## 3) 如何新增/修改 Router 规则（意图分发）

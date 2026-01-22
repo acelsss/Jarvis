@@ -29,8 +29,11 @@ CAPABILITY_INDEX_SCHEMA_HINT = (
 
 PLAN_SCHEMA = (
     "JSON object with fields: "
-    '"objective" (string, required), '
-    '"steps" (array of strings, ordered), '
-    '"risks" (array of strings), '
-    '"success_criteria" (array of strings).'
+    '"steps" (array of objects, required), '
+    '"notes" (string, optional). '
+    'Each step object must have: '
+    '"tool_id" (string, required), '
+    '"description" (string, required), '
+    '"params" (object, required, tool-specific parameters like {"operation": "write", "path": "...", "content": "..."} for file tool), '
+    '"risk_level" (string enum: R0|R1|R2|R3, required).'
 )

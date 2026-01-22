@@ -38,6 +38,7 @@ from tools.registry import ToolRegistry
 from tools.runner import ToolRunner
 from tools.local.shell_tool import ShellTool
 from tools.local.file_tool import FileTool
+from tools.python_run import PythonRunTool
 from skills.registry import SkillsRegistry
 from skills.runtime.to_plan import skill_to_plan
 
@@ -68,8 +69,10 @@ async def main():
     # 注册工具
     file_tool = FileTool(sandbox_root=sandbox_root)
     shell_tool = ShellTool()
+    python_run_tool = PythonRunTool()
     tool_registry.register(file_tool)
     tool_registry.register(shell_tool)
+    tool_registry.register(python_run_tool)
     
     # 1. CLI 输入
     if len(sys.argv) > 1:
@@ -391,13 +394,30 @@ async def main():
                     task.add_artifact(ref)
                     print(f"    📄 产物: {ref}")
             
-            audit_logger.log("tool_executed", {
-                "task_id": task.task_id,
-                "step_id": step.step_id,
-                "tool_id": step.tool_id,
-                "success": True,
-                "evidence_refs": tool_result.evidence_refs,
-            })
+            # 特殊处理：python_run 工具的审计日志
+            if step.tool_id == "python_run":
+                result = tool_result.result
+                meta = result.get("meta", {})
+                audit_logger.log("tool.python_run", {
+                    "task_id": task.task_id,
+                    "step_id": step.step_id,
+                    "script_path_relative": meta.get("script_path", ""),
+                    "args": meta.get("args", []),
+                    "cwd": meta.get("cwd", str(sandbox_root)),
+                    "timeout_seconds": meta.get("timeout_seconds", 60),
+                    "exit_code": result.get("exit_code", -1),
+                    "stdout_len": len(result.get("stdout_excerpt", "")),
+                    "stderr_len": len(result.get("stderr_excerpt", "")),
+                    "duration_ms": meta.get("duration_ms", 0),
+                })
+            else:
+                audit_logger.log("tool_executed", {
+                    "task_id": task.task_id,
+                    "step_id": step.step_id,
+                    "tool_id": step.tool_id,
+                    "success": True,
+                    "evidence_refs": tool_result.evidence_refs,
+                })
         else:
             print(f"    ✗ 执行失败: {tool_result.error}")
             task.add_action({
