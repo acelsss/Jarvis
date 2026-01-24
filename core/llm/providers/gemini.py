@@ -6,7 +6,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import Optional, List, Dict
 
 from ..client_base import LLMClient
 from ..json_utils import safe_load_json
@@ -37,7 +37,12 @@ class GeminiClient(LLMClient):
     """Gemini client using REST generateContent."""
 
     def complete_json(
-        self, purpose: str, system: str, user: str, schema_hint: str
+        self, 
+        purpose: str, 
+        system: str, 
+        user: str, 
+        schema_hint: str,
+        chat_history_messages: Optional[List[Dict[str, str]]] = None,
     ) -> dict:
         api_key = _get_env_value("GEMINI_API_KEY")
         if not api_key:
@@ -62,9 +67,31 @@ class GeminiClient(LLMClient):
             ]
         )
 
+        # 构建消息内容列表：历史消息 + 当前用户消息
+        contents = []
+        
+        # 注入历史消息（Gemini 使用 role 为 "user" 或 "model"）
+        if chat_history_messages:
+            for msg in chat_history_messages:
+                if isinstance(msg, dict) and msg.get("role") != "system":
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    # Gemini 使用 "model" 而不是 "assistant"
+                    gemini_role = "model" if role == "assistant" else "user"
+                    contents.append({
+                        "role": gemini_role,
+                        "parts": [{"text": content}]
+                    })
+        
+        # 添加当前用户消息
+        contents.append({
+            "role": "user",
+            "parts": [{"text": user_text}]
+        })
+
         payload = {
             "system_instruction": {"parts": [{"text": system_text}]},
-            "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+            "contents": contents,
             "generationConfig": {"temperature": 0.2},
         }
 

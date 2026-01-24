@@ -3,7 +3,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 try:
     from dotenv import load_dotenv
@@ -42,77 +42,33 @@ from tools.python_run import PythonRunTool
 from pathlib import Path
 from skills.registry import SkillsRegistry
 from skills.runtime.to_plan import skill_to_plan
+from core.session.history import SessionHistoryBuffer
 
 
-async def main():
-    """主函数 - Kernel MVP 最小闭环。"""
-    print("=" * 60)
-    print("Jarvis v0.1 - Kernel MVP")
-    print("=" * 60)
-    
-    # 初始化组件
-    config = Config()
-    preferences = config.load_yaml("preferences.yaml")
-    sandbox_root = preferences.get("sandbox", {}).get("sandbox_root", "./sandbox")
-    
-    task_manager = TaskManager()
-    planner = Planner(sandbox_root=sandbox_root)
-    approval_gate = ApprovalGate()
-    executor = Executor()
-    audit_logger = AuditLogger()
-    tool_registry = ToolRegistry()
-    tool_runner = ToolRunner()
-    
-    # 初始化技能注册表
-    skills_registry = SkillsRegistry(workspace_dir="./skills_workspace")
-    skills_registry.scan_workspace()
-    
-    # 注册工具
-    file_tool = FileTool(sandbox_root=sandbox_root)
-    shell_tool = ShellTool()
-    python_run_tool = PythonRunTool()
-    tool_registry.register(file_tool)
-    tool_registry.register(shell_tool)
-    tool_registry.register(python_run_tool)
-    
-    # 1. CLI 输入
-    if len(sys.argv) > 1:
-        description = " ".join(sys.argv[1:])
-    else:
-        description = input("\n请输入任务描述 (输入 /skills 查看可用技能): ").strip()
-    
-    # 处理特殊命令
-    if description == "/skills":
-        print("\n" + "=" * 60)
-        print("已加载的技能列表")
-        print("=" * 60)
-        skills = skills_registry.list_all()
-        if not skills:
-            print("暂无已加载的技能")
-        else:
-            for skill_id, skill in skills.items():
-                print(f"\n技能ID: {skill_id}")
-                print(f"  名称: {skill.name}")
-                print(f"  描述: {skill.description}")
-                print(f"  标签: {', '.join(skill.tags) if skill.tags else '无'}")
-                if skill.file_path:
-                    print(f"  路径: {skill.file_path}")
-                # 显示脚本列表（如果有）
-                if skill.metadata and 'discovered_files' in skill.metadata:
-                    scripts = skill.metadata['discovered_files'].get('scripts', [])
-                    if scripts:
-                        print(f"  脚本: {len(scripts)} 个")
-                        for script_path in scripts[:5]:  # 最多显示 5 个
-                            script_name = Path(script_path).name
-                            print(f"    - {script_name}")
-                        if len(scripts) > 5:
-                            print(f"    ... 还有 {len(scripts) - 5} 个脚本")
-        print("\n" + "=" * 60)
-        return
-    
+async def process_single_task(
+    description: str,
+    task_manager: TaskManager,
+    planner: Planner,
+    approval_gate: ApprovalGate,
+    executor: Executor,
+    audit_logger: AuditLogger,
+    tool_registry: ToolRegistry,
+    tool_runner: ToolRunner,
+    skills_registry: SkillsRegistry,
+    sandbox_root: str,
+    llm_client: Any,
+    llm_router_enabled: bool,
+    llm_planner_enabled: bool,
+    session_history: SessionHistoryBuffer,
+) -> Optional[str]:
+    """处理单轮任务，返回对用户可见的回复文本（用于 QA 模式）或 None（用于执行模式）。"""
     if not description:
         print("错误: 任务描述不能为空")
-        return
+        return None
+    
+    # 在执行链路前先记录 user 输入
+    session_history.add_user(description)
+    chat_history_messages = session_history.get_window()
     
     print(f"\n[1/8] 接收任务: {description}")
     
@@ -167,14 +123,6 @@ async def main():
     print("[4/8] 路由任务...")
     available_tools = tool_registry.list_all()
     available_skills = skills_registry.list_all()
-    llm_client = None
-    llm_router_enabled = os.getenv("LLM_ENABLE_ROUTER") == "1"
-    llm_planner_enabled = os.getenv("LLM_ENABLE_PLANNER") == "1"
-    if llm_router_enabled or llm_planner_enabled:
-        llm_client = build_llm_client()
-        if llm_client is None:
-            llm_router_enabled = False
-            llm_planner_enabled = False
 
     route_decision = None
     matched_skill = None
@@ -190,17 +138,32 @@ async def main():
             capability_index,
             llm_client,
             audit_logger=audit_logger,
+            chat_history_messages=chat_history_messages,
         )
 
         if route_decision.get("fallback_to_rule"):
-            matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+            matched_skill, routed_tools = route_task(
+                task, 
+                available_tools, 
+                available_skills,
+                llm_client=llm_client,
+                audit_logger=audit_logger,
+                chat_history_messages=chat_history_messages,
+            )
         else:
             route_type = route_decision.get("route_type")
             if route_type == "skill":
                 skill_id = route_decision.get("skill_id")
                 matched_skill = available_skills.get(skill_id)
                 if not matched_skill:
-                    matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+                    matched_skill, routed_tools = route_task(
+                        task, 
+                        available_tools, 
+                        available_skills,
+                        llm_client=llm_client,
+                        audit_logger=audit_logger,
+                        chat_history_messages=chat_history_messages,
+                    )
                 else:
                     skill_fulltext = _load_skill_fulltext(matched_skill.skill_id)
                     # 如果启用了 LLM planner，使用 LLM 来生成计划（能理解技能文档并生成实际内容）
@@ -214,7 +177,14 @@ async def main():
                     if tool_id in available_tools or (isinstance(tool_id, str) and tool_id.startswith("mcp."))
                 ]
                 if not routed_tools:
-                    matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+                    matched_skill, routed_tools = route_task(
+                        task, 
+                        available_tools, 
+                        available_skills,
+                        llm_client=llm_client,
+                        audit_logger=audit_logger,
+                        chat_history_messages=chat_history_messages,
+                    )
             elif route_type == "qa":
                 print("\n进入问答模式，不进入规划与执行。")
                 answer = handle_qa(
@@ -222,6 +192,7 @@ async def main():
                     context,
                     llm_client,
                     audit_logger=audit_logger,
+                    chat_history_messages=chat_history_messages,
                 )
                 task.update_status(TASK_STATUS_COMPLETED)
                 task_manager.update_task(task, extra_info={"qa_answer": answer})
@@ -230,7 +201,9 @@ async def main():
                     "qa": True,
                 })
                 print(f"\n回答:\n{answer}")
-                return
+                # 记录助手回复到历史
+                session_history.add_assistant(answer)
+                return answer
             elif route_type == "clarify":
                 print("\n需要澄清，不进入规划与执行。")
                 questions = route_decision.get("clarify_questions") or []
@@ -238,11 +211,28 @@ async def main():
                     print("澄清问题：")
                     for q in questions:
                         print(f"- {q}")
-                return
+                # 将澄清问题作为助手回复记录
+                clarify_text = "需要澄清：\n" + "\n".join(f"- {q}" for q in questions)
+                session_history.add_assistant(clarify_text)
+                return None
             else:
-                matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+                matched_skill, routed_tools = route_task(
+                    task, 
+                    available_tools, 
+                    available_skills,
+                    llm_client=llm_client,
+                    audit_logger=audit_logger,
+                    chat_history_messages=chat_history_messages,
+                )
     else:
-        matched_skill, routed_tools = route_task(task, available_tools, available_skills)
+        matched_skill, routed_tools = route_task(
+            task, 
+            available_tools, 
+            available_skills,
+            llm_client=llm_client,
+            audit_logger=audit_logger,
+            chat_history_messages=chat_history_messages,
+        )
     
     if matched_skill:
         print(f"  - 匹配到技能: {matched_skill.name} ({matched_skill.skill_id})")
@@ -265,6 +255,7 @@ async def main():
                 skill_fulltext=skill_fulltext,
                 llm_client=llm_client,
                 audit_logger=audit_logger,
+                chat_history_messages=chat_history_messages,
             )
             plan.source = f"skill:{matched_skill.skill_id}"
         else:
@@ -281,6 +272,7 @@ async def main():
             routed_tools,
             llm_client=llm_client if llm_planner_enabled else None,
             audit_logger=audit_logger,
+            chat_history_messages=chat_history_messages,
         )
 
     if route_decision:
@@ -344,7 +336,7 @@ async def main():
                     "approver": approval.approver,
                 })
                 print("✗ 已拒绝，任务终止")
-                return
+                return None
             else:
                 print("请输入 yes 或 no")
     else:
@@ -506,6 +498,168 @@ async def main():
     print(f"审批记录: {approval.approval_id if approval else '无'}")
     print(f"审计日志: memory/raw_logs/audit.log.jsonl")
     print("=" * 60)
+    
+    # 生成对用户可见的总结文本，用于记录到历史
+    summary_text = f"任务已完成。执行的工具: {', '.join(executed_tools) if executed_tools else '无'}"
+    if python_run_artifacts:
+        summary_text += f"\n产物: {len(python_run_artifacts)} 个文件"
+    session_history.add_assistant(summary_text)
+    
+    return None
+
+
+def print_help():
+    """打印帮助信息。"""
+    print("\n" + "=" * 60)
+    print("可用命令:")
+    print("=" * 60)
+    print("  /exit 或 /quit  - 退出程序")
+    print("  /help           - 显示此帮助信息")
+    print("  /skills         - 列出所有可用技能")
+    print("  /reset          - 清空当前会话的对话历史")
+    print("=" * 60 + "\n")
+
+
+def print_skills(skills_registry: SkillsRegistry):
+    """打印技能列表。"""
+    print("\n" + "=" * 60)
+    print("已加载的技能列表")
+    print("=" * 60)
+    skills = skills_registry.list_all()
+    if not skills:
+        print("暂无已加载的技能")
+    else:
+        for skill_id, skill in skills.items():
+            print(f"\n技能ID: {skill_id}")
+            print(f"  名称: {skill.name}")
+            print(f"  描述: {skill.description}")
+            print(f"  标签: {', '.join(skill.tags) if skill.tags else '无'}")
+            if skill.file_path:
+                print(f"  路径: {skill.file_path}")
+            # 显示脚本列表（如果有）
+            if skill.metadata and 'discovered_files' in skill.metadata:
+                scripts = skill.metadata['discovered_files'].get('scripts', [])
+                if scripts:
+                    print(f"  脚本: {len(scripts)} 个")
+                    for script_path in scripts[:5]:  # 最多显示 5 个
+                        script_name = Path(script_path).name
+                        print(f"    - {script_name}")
+                    if len(scripts) > 5:
+                        print(f"    ... 还有 {len(scripts) - 5} 个脚本")
+    print("\n" + "=" * 60 + "\n")
+
+
+async def main():
+    """主函数 - REPL 模式，常驻在线。"""
+    # 打印 banner（仅一次）
+    print("=" * 60)
+    print("Jarvis v0.1 - Kernel MVP (REPL Mode)")
+    print("=" * 60)
+    print("输入 /help 查看可用命令\n")
+    
+    # 初始化组件
+    config = Config()
+    preferences = config.load_yaml("preferences.yaml")
+    sandbox_root = preferences.get("sandbox", {}).get("sandbox_root", "./sandbox")
+    
+    task_manager = TaskManager()
+    planner = Planner(sandbox_root=sandbox_root)
+    approval_gate = ApprovalGate()
+    executor = Executor()
+    audit_logger = AuditLogger()
+    tool_registry = ToolRegistry()
+    tool_runner = ToolRunner()
+    
+    # 初始化技能注册表
+    skills_registry = SkillsRegistry(workspace_dir="./skills_workspace")
+    skills_registry.scan_workspace()
+    
+    # 注册工具
+    file_tool = FileTool(sandbox_root=sandbox_root)
+    shell_tool = ShellTool()
+    python_run_tool = PythonRunTool()
+    tool_registry.register(file_tool)
+    tool_registry.register(shell_tool)
+    tool_registry.register(python_run_tool)
+    
+    # 初始化 LLM 客户端
+    llm_client = None
+    llm_router_enabled = os.getenv("LLM_ENABLE_ROUTER") == "1"
+    llm_planner_enabled = os.getenv("LLM_ENABLE_PLANNER") == "1"
+    if llm_router_enabled or llm_planner_enabled:
+        llm_client = build_llm_client()
+        if llm_client is None:
+            llm_router_enabled = False
+            llm_planner_enabled = False
+    
+    # 初始化会话历史缓冲区
+    session_history = SessionHistoryBuffer()
+    
+    # REPL 循环
+    while True:
+        try:
+            # 读取用户输入
+            user_input = input("> ").strip()
+            
+            # 处理空输入
+            if not user_input:
+                continue
+            
+            # 处理命令
+            if user_input in ("/exit", "/quit"):
+                print("再见！")
+                break
+            elif user_input == "/help":
+                print_help()
+                continue
+            elif user_input == "/skills":
+                print_skills(skills_registry)
+                continue
+            elif user_input == "/reset":
+                session_history.reset()
+                print("✓ 对话历史已清空")
+                continue
+            
+            # 处理单轮任务
+            try:
+                await process_single_task(
+                    description=user_input,
+                    task_manager=task_manager,
+                    planner=planner,
+                    approval_gate=approval_gate,
+                    executor=executor,
+                    audit_logger=audit_logger,
+                    tool_registry=tool_registry,
+                    tool_runner=tool_runner,
+                    skills_registry=skills_registry,
+                    sandbox_root=sandbox_root,
+                    llm_client=llm_client,
+                    llm_router_enabled=llm_router_enabled,
+                    llm_planner_enabled=llm_planner_enabled,
+                    session_history=session_history,
+                )
+            except Exception as e:
+                print(f"\n✗ 处理任务时出错: {e}")
+                import traceback
+                if os.getenv("DEBUG") == "1":
+                    traceback.print_exc()
+                # 即使出错也继续下一轮
+                continue
+                
+        except KeyboardInterrupt:
+            print("\n\n用户中断，退出...")
+            break
+        except EOFError:
+            print("\n\n再见！")
+            break
+        except Exception as e:
+            print(f"\n✗ 发生未预期的错误: {e}")
+            import traceback
+            if os.getenv("DEBUG") == "1":
+                traceback.print_exc()
+            # 继续下一轮，不退出
+            continue
+    
 
 
 if __name__ == "__main__":

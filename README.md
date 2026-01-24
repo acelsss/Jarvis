@@ -143,6 +143,7 @@ python -m apps.cli.main
 ## Documentation
 
 - **[docs/README_FOR_CONTRIBUTORS.md](docs/README_FOR_CONTRIBUTORS.md)** - 贡献者指南：面向使用 Cursor 参与开发的协作者，提供一致的工程方式扩展 Jarvis 的指导
+  - 包含 **Prompt 管理规范**：所有 LLM prompt 统一放在 `prompts/` 目录，禁止在代码中硬编码长字符串
 - **[docs/EXTENSION_POINTS.md](docs/EXTENSION_POINTS.md)** - 扩展点与兼容性契约：定义 Jarvis 的稳定内核（Kernel API Contract）与可替换扩展点（Pluggable Layers）
 
 ---

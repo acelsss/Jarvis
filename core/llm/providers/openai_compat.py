@@ -38,7 +38,12 @@ class OpenAICompatibleClient(LLMClient):
     """OpenAI-compatible client using Chat Completions."""
 
     def complete_json(
-        self, purpose: str, system: str, user: str, schema_hint: str
+        self, 
+        purpose: str, 
+        system: str, 
+        user: str, 
+        schema_hint: str,
+        chat_history_messages: Optional[List[Dict[str, str]]] = None,
     ) -> dict:
         api_key = _get_env_value("OPENAI_API_KEY")
         if not api_key:
@@ -64,12 +69,26 @@ class OpenAICompatibleClient(LLMClient):
             ]
         )
 
+        # 构建消息列表：system + chat_history + 当前 user
+        messages = [
+            {"role": "system", "content": system_content}
+        ]
+        
+        # 注入历史消息（不包含 system 消息）
+        if chat_history_messages:
+            for msg in chat_history_messages:
+                if isinstance(msg, dict) and msg.get("role") != "system":
+                    messages.append({
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", "")
+                    })
+        
+        # 添加当前用户消息
+        messages.append({"role": "user", "content": user_content})
+
         payload = {
             "model": model,
-            "messages": [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": user_content},
-            ],
+            "messages": messages,
             "temperature": 0.2,
         }
 

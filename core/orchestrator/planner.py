@@ -14,6 +14,7 @@ from core.contracts.risk import (
 )
 from core.llm.schemas import PLAN_SCHEMA
 from core.utils.ids import generate_id
+from core.prompts.loader import PromptLoader
 
 
 class Planner:
@@ -218,6 +219,7 @@ class Planner:
         skill_fulltext: Optional[str] = None,
         llm_client: Any = None,
         audit_logger: Any = None,
+        chat_history_messages: Optional[List[Dict[str, str]]] = None,
     ) -> Plan:
         """为任务创建执行计划（生成2-3个步骤，至少包含一个file_tool）。
         
@@ -237,50 +239,37 @@ class Planner:
             provider = os.getenv("LLM_PROVIDER", "unknown")
             try:
                 tools_summary = self._summarize_tools(available_tools)
-                system = "\n".join(
-                    [
-                        "你是规划助手。",
-                        "只返回包含 steps 与 notes 的 JSON。",
-                        "仅使用提供的 tool_ids。",
-                        "尽量生成 2-5 个步骤。",
-                        "如可用，请至少包含一个 file 工具步骤。",
-                        "",
-                        "重要：对于 file 工具，支持以下操作：",
-                        '  - "operation": "write" - 写入文件',
-                        '    params: {"operation": "write", "path": "文件路径", "content": "文件内容"}',
-                        '  - "operation": "read" - 读取文件（可用于读取技能引用文件）',
-                        '    params: {"operation": "read", "path": "文件路径"}',
-                        '  - "operation": "list" - 列出目录内容',
-                        '    params: {"operation": "list", "path": "目录路径"}',
-                        "",
-                        "如果技能文档中提到了引用文件（如 references/workflows.md），",
-                        "你可以在计划中添加 file.read 步骤来读取这些文件。",
-                        "",
-                        "可用工具（摘要 JSON）:",
-                        json.dumps(tools_summary, ensure_ascii=False),
-                    ]
-                )
-                user = "\n".join(
-                    [
-                        f"任务描述: {task.description}",
-                        "请规划步骤，包含 tool_id、params、risk_level（R0-R3）与 description。",
-                        "若提供了技能全文，请结合技能要求规划步骤。",
-                    ]
-                )
+                
+                loader = PromptLoader()
+                parsed = loader.parse("planner/default.md")
+                
+                # 处理 skill_fulltext 条件
+                skill_fulltext_section = ""
                 if skill_fulltext:
-                    user = "\n".join(
-                        [
-                            user,
-                            "技能全文如下：",
-                            skill_fulltext,
-                        ]
-                    )
+                    skill_fulltext_section = f"\n技能全文如下：\n{skill_fulltext}"
+                
+                system_prompt = loader.render(
+                    parsed["sections"]["system"],
+                    {
+                        "tools_summary_json": json.dumps(tools_summary, ensure_ascii=False),
+                    },
+                    strict=True,
+                )
+                user_prompt = loader.render(
+                    parsed["sections"].get("user", ""),
+                    {
+                        "task_description": task.description,
+                        "skill_fulltext_section": skill_fulltext_section,
+                    },
+                    strict=True,
+                )
                 try:
                     llm_result = llm_client.complete_json(
                         purpose="plan",
-                        system=system,
-                        user=user,
+                        system=system_prompt,
+                        user=user_prompt,
                         schema_hint=PLAN_SCHEMA,
+                        chat_history_messages=chat_history_messages,
                     )
                 except Exception as json_err:
                     print(f"LLM 返回的 JSON 解析失败: {json_err}")

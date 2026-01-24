@@ -1,6 +1,8 @@
 """QA handler for chat responses."""
 import os
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict
+
+from core.prompts.loader import PromptLoader
 
 
 def _truncate_text(text: str, max_len: int = 200) -> str:
@@ -35,31 +37,44 @@ def handle_qa(
     context_bundle: Any,
     llm_client: Any,
     audit_logger: Any = None,
+    chat_history_messages: Optional[List[Dict[str, str]]] = None,
 ) -> str:
-    """处理 QA 路由，返回回答文本。"""
+    """处理 QA 路由，返回回答文本。
+    
+    Args:
+        task_text: 任务文本
+        context_bundle: 上下文包
+        llm_client: LLM 客户端
+        audit_logger: 审计日志记录器
+        chat_history_messages: 可选的对话历史消息列表
+    """
     if not llm_client:
         return "LLM 不可用，无法生成回答。"
 
     provider = os.getenv("LLM_PROVIDER", "unknown")
-    system = "\n".join(
-        [
-            "你是用于问答的助手。",
-            "只返回包含 answer 字段的 JSON。",
-            "Schema: {\"answer\": \"string\"}",
-        ]
+    
+    loader = PromptLoader()
+    parsed = loader.parse("chat/qa.md")
+    
+    system_prompt = loader.render(
+        parsed["sections"]["system"],
+        {},
+        strict=True,
     )
-    user = "\n".join(
-        [
-            f"用户输入: {task_text}",
-            "上下文摘要 JSON（可能为空）:",
-            str(context_bundle) if context_bundle is not None else "{}",
-        ]
+    user_prompt = loader.render(
+        parsed["sections"].get("user", ""),
+        {
+            "task_text": task_text,
+            "context_bundle": str(context_bundle) if context_bundle is not None else "{}",
+        },
+        strict=True,
     )
     result = llm_client.complete_json(
         purpose="qa",
-        system=system,
-        user=user,
+        system=system_prompt,
+        user=user_prompt,
         schema_hint='{"answer":"string"}',
+        chat_history_messages=chat_history_messages,
     )
     answer = ""
     if isinstance(result, dict):

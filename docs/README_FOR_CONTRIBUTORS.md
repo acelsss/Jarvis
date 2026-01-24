@@ -172,7 +172,234 @@ version: 0.1
 
 ---
 
-## 3) 如何新增/修改 Router 规则（意图分发）
+## 3) Prompt 管理规范
+
+### 3.1 硬要求（必须遵守）
+
+#### 3.1.1 存放位置
+- **所有 LLM prompt 必须存放在 `prompts/` 目录下**
+- **禁止在代码中新增超过 15 行的硬编码 prompt 文本**
+- 超过 15 行的 prompt 必须提取到 `prompts/` 目录下的 `.md` 文件
+
+#### 3.1.2 YAML Frontmatter（必需字段）
+每个 prompt 文件必须包含完整的 YAML frontmatter，至少包含以下字段：
+
+```yaml
+---
+id: router/llm_first          # prompt_id（文件路径，不含 .md）
+name: router_llm_first        # 人类可读名称
+version: 1.0.0                # 版本号（语义版本或递增）
+used_by:                      # 使用位置列表
+  - core/router/route.py::route_llm_first()
+inputs:                        # 输入变量声明
+  - route_schema: RouteDecision schema 字符串
+  - capability_index_json: 能力索引摘要 JSON
+output:                        # 输出约束
+  type: json                  # json 或 text
+  schema_fields:              # JSON 输出时必需字段（可选）
+    - route_type
+    - confidence
+    - skill_id
+  constraints: []             # 额外约束（如 ["No tool calls"]）
+---
+```
+
+**必需字段说明**：
+- `id`: prompt 的唯一标识符，通常是文件路径（不含 `.md` 扩展名）
+- `name`: 人类可读的名称
+- `version`: 版本号，每次修改必须更新
+- `used_by`: 使用该 prompt 的代码位置列表
+- `inputs`: 所有在 prompt 中使用的 `{{var}}` 变量必须在此声明
+- `output.type`: 必须是 `json` 或 `text`
+- `output.schema_fields`: 当 `output.type=json` 时，列出必需字段（可选但推荐）
+- `output.constraints`: 额外约束说明（如禁止工具调用等）
+
+#### 3.1.3 Role 分段结构
+每个 prompt 文件必须包含明确的 role 分段：
+
+```markdown
+## system
+
+你是路由助手。
+只返回符合 RouteDecision schema 的 JSON。
+...
+
+## user
+
+用户输入: {{task_text}}
+...
+```
+
+**要求**：
+- 必须包含 `## system` 分段
+- 可选包含 `## user` 分段
+- 可选包含 `## assistant` 分段（用于 few-shot 示例）
+- 禁止使用 `---` 作为分隔符（与 YAML frontmatter 冲突）
+
+#### 3.1.4 变量声明与渲染
+- **所有 `{{var}}` 变量必须在 frontmatter.inputs 中声明**
+- **render 默认 strict 模式**：如果提供了未声明的变量，应该警告（未来版本可能报错）
+- **如果 prompt 中使用了 `{{var}}` 但 inputs 中未声明，校验会失败**
+
+#### 3.1.5 输出约束
+根据 prompt 类型，必须声明相应的输出约束：
+
+**Router/Planner 类（JSON 输出）**：
+```yaml
+output:
+  type: json
+  schema_fields:
+    - route_type
+    - confidence
+    - skill_id
+```
+
+**Chat/QA 类（文本输出）**：
+```yaml
+output:
+  type: text
+  constraints:
+    - "No tool calls"
+```
+
+#### 3.1.6 Prompt ID 稳定性
+- **代码引用以 prompt_id（文件路径）为准，禁止随意改名**
+- **如需新版本**：使用 `*_v2.md` 命名并保留旧版本以便回滚
+- **迁移流程**：先添加新文件 → 更新代码引用 → 运行测试 → 删除旧文件
+
+### 3.2 推荐项（强烈建议）
+
+#### 3.2.1 公共片段复用
+- 将公共 prompt 片段放在 `prompts/_shared/` 目录
+- 尽量复用，避免复制粘贴
+- 示例：工具约束说明、JSON schema 说明等
+
+#### 3.2.2 Model Hints（可选）
+在 frontmatter 中声明模型参数建议（不强制解析，但作为治理依据）：
+
+```yaml
+model_hints:
+  temperature: 0.7
+  max_tokens: 2000
+```
+
+#### 3.2.3 版本管理
+- 每次修改 prompt 必须更新 `version` 字段
+- 建议使用语义版本（如 `1.0.0` → `1.0.1`）或递增版本号
+
+### 3.3 禁止项（严格禁止）
+
+#### 3.3.1 复杂条件语法
+- **禁止在 prompt 内写复杂条件语法**（如 `{{#if}}`, `{{#each}}` 等）
+- **条件逻辑必须放在代码中**，通过不同的 prompt 文件或变量值来处理
+
+#### 3.3.2 Provider 私有字段
+- **禁止 prompt 绑定某一 provider 的私有字段**（如 OpenAI 的 `system_message` 格式）
+- 除非在文档中明确说明，并在代码中提供兼容层
+
+#### 3.3.3 高风险系统动作
+- **禁止 prompt 引导执行高风险系统动作**（如删除文件、执行命令）
+- 所有高风险操作必须通过 tool + 风险门控机制
+
+### 3.4 变更流程
+
+#### 3.4.1 新增/修改 Prompt 的标准流程
+1. **编辑 prompt 文件**：在 `prompts/` 对应目录下创建/修改 `.md` 文件
+2. **更新 frontmatter**：确保所有必需字段齐全，更新 `version`
+3. **运行校验测试**：执行 `python -m pytest tests/test_prompts.py` 确保通过
+4. **运行最小回归**：CLI 跑一条路由/规划/QA 任务，验证行为
+5. **提交代码**：确保所有测试通过后再提交
+
+#### 3.4.2 JSON 输出 Prompt 的特殊要求
+对于 `output.type=json` 的 prompt：
+- **必须能 JSON parse**：提供测试数据后，LLM 输出必须能成功解析为 JSON
+- **必须包含必需字段**：解析后的 JSON 必须包含 `output.schema_fields` 中声明的所有字段
+- **建议添加测试用例**：在 `tests/test_prompts.py` 中添加针对性的测试
+
+### 3.5 测试要求（强制）
+
+所有 prompt 必须通过以下测试：
+
+#### 3.5.1 Prompt 存在性测试
+- 所有代码中引用的 `prompt_id` 必须能成功 `load()`
+- 测试位置：`tests/test_prompts.py::test_all_prompts_loadable()`
+
+#### 3.5.2 Prompt 渲染测试
+- 提供完整的 `vars` 后，`render()` 结果不应残留任何 `{{...}}` 占位符
+- 测试位置：`tests/test_prompts.py::test_prompt_rendering()`
+
+#### 3.5.3 结构校验测试
+- Frontmatter 必需字段齐全（id, name, version, used_by, inputs, output）
+- 必须包含 `## system` 分段
+- 所有 `{{var}}` 变量都在 `inputs` 中声明
+- 测试位置：`tests/test_prompts.py::test_prompt_structure()`
+
+#### 3.5.4 运行测试
+```bash
+# 运行所有 prompt 测试
+python -m pytest tests/test_prompts.py -v
+
+# 运行特定测试
+python -m pytest tests/test_prompts.py::test_all_prompts_loadable -v
+```
+
+### 3.6 目录结构
+
+```
+prompts/
+  _shared/           # 共享的 prompt 片段（如工具约束说明）
+    TEMPLATE.md      # 标准模板（参考用）
+  router/            # 路由相关的 prompts
+    llm_first.md
+    rule_fallback.md
+  planner/           # 规划相关的 prompts
+    default.md
+  chat/              # 对话/问答相关的 prompts
+    qa.md
+  skills/            # 技能注入模板（如需要）
+  tools/             # 工具调用相关的 prompts（如需要）
+```
+
+### 3.7 如何使用 PromptLoader
+
+在代码中使用 `PromptLoader` 加载 prompt：
+
+```python
+from core.prompts.loader import PromptLoader
+
+loader = PromptLoader()
+prompt_template = loader.load("router/llm_first.md")
+
+# 解析 role 分段（## system, ## user 等）
+# 注意：代码中需要实现解析逻辑，提取 ## system 和 ## user 部分
+
+# 渲染变量
+system = loader.render(system_template, {
+    "route_schema": ROUTE_SCHEMA_V0_2,
+    "capability_index_json": json.dumps(index, ensure_ascii=False),
+})
+user = loader.render(user_template, {
+    "task_text": task_text,
+    "context_summary_json": json.dumps(context, ensure_ascii=False),
+})
+```
+
+### 3.8 验收清单
+
+在提交 prompt 相关代码前，请确认：
+
+- [ ] 所有 LLM prompt 都已存放在 `prompts/` 目录
+- [ ] 代码中不再有超过 15 行的硬编码 prompt 字符串
+- [ ] Prompt 文件包含完整的 YAML frontmatter（所有必需字段）
+- [ ] Prompt 文件包含 `## system` 分段
+- [ ] 所有 `{{var}}` 变量都在 `inputs` 中声明
+- [ ] `output.type` 正确声明（json 或 text）
+- [ ] 运行 `pytest tests/test_prompts.py` 全部通过
+- [ ] CLI 运行一次任务，输出与预期一致
+
+---
+
+## 4) 如何新增/修改 Router 规则（意图分发）
 
 ### 3.1 Router 的职责边界
 Router 只做：
@@ -199,7 +426,7 @@ Router 不做：
 
 ---
 
-## 4) 开发规范（强烈建议遵守）
+## 5) 开发规范（强烈建议遵守）
 
 ### 4.1 “一件事一个 commit”
 - 新增 Tool：一个 commit
@@ -218,7 +445,7 @@ Router 不做：
 
 ---
 
-## 5) 常见问题（FAQ）
+## 6) 常见问题（FAQ）
 
 ### Q1: 我能不能在 Skill 里直接写 bash 然后执行？
 v0.1 不允许。Skill 是流程资产，执行必须通过 ToolRunner，且受风险门控。

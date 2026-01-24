@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.contracts.task import Task
 from core.contracts.skill import JarvisSkill
 from core.llm.schemas import ROUTE_SCHEMA, ROUTE_SCHEMA_V0_2, CAPABILITY_INDEX_SCHEMA_HINT
+from core.prompts.loader import PromptLoader
 
 
 def _truncate_text(text: str, max_len: int = 120) -> str:
@@ -213,6 +214,7 @@ def route_llm_first(
     capability_index: Dict[str, Any],
     llm_client: Any,
     audit_logger: Any = None,
+    chat_history_messages: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """LLM-first 路由，输出 RouteDecision 字典。"""
     guard_hit = _hard_guard_match(task_text)
@@ -252,29 +254,34 @@ def route_llm_first(
     provider = os.getenv("LLM_PROVIDER", "unknown")
     truncated_index = _truncate_capability_index(capability_index or {})
     context_summary = _build_context_summary(context_bundle)
-    system = "\n".join(
-        [
-            "你是路由助手。",
-            "只返回符合 RouteDecision schema 的 JSON。",
-            f"RouteDecision schema: {ROUTE_SCHEMA_V0_2}",
-            f"能力索引字段: {CAPABILITY_INDEX_SCHEMA_HINT}",
-            "能力索引（摘要 JSON）:",
-            json.dumps(truncated_index, ensure_ascii=False),
-        ]
+    
+    loader = PromptLoader()
+    parsed = loader.parse("router/llm_first.md")
+    
+    system_prompt = loader.render(
+        parsed["sections"]["system"],
+        {
+            "route_schema": ROUTE_SCHEMA_V0_2,
+            "capability_index_schema": CAPABILITY_INDEX_SCHEMA_HINT,
+            "capability_index_json": json.dumps(truncated_index, ensure_ascii=False),
+        },
+        strict=True,
     )
-    user = "\n".join(
-        [
-            f"用户输入: {task_text}",
-            "重要上下文摘要 JSON:",
-            json.dumps(context_summary, ensure_ascii=False),
-        ]
+    user_prompt = loader.render(
+        parsed["sections"].get("user", ""),
+        {
+            "task_text": task_text,
+            "context_summary_json": json.dumps(context_summary, ensure_ascii=False),
+        },
+        strict=True,
     )
     try:
         llm_result = llm_client.complete_json(
             purpose="route",
-            system=system,
-            user=user,
+            system=system_prompt,
+            user=user_prompt,
             schema_hint=ROUTE_SCHEMA_V0_2,
+            chat_history_messages=chat_history_messages,
         )
     except Exception:
         return {"fallback_to_rule": True, "reason": "llm_error"}
@@ -332,6 +339,7 @@ def route_task(
     available_skills: Dict[str, JarvisSkill] = None,
     llm_client: Any = None,
     audit_logger: Any = None,
+    chat_history_messages: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[Optional[JarvisSkill], List[str]]:
     """路由任务到合适的技能或工具（简单规则路由）。
     
@@ -384,28 +392,31 @@ def route_task(
         try:
             skills_summary = _summarize_skills(available_skills)
             tools_summary = _summarize_tools(available_tools)
-            system = "\n".join(
-                [
-                    "你是路由助手。",
-                    "只选择一种路由：skill 或 tools。",
-                    "只返回 JSON。",
-                    "可用技能（摘要 JSON）:",
-                    json.dumps(skills_summary, ensure_ascii=False),
-                    "可用工具（摘要 JSON）:",
-                    json.dumps(tools_summary, ensure_ascii=False),
-                ]
+            
+            loader = PromptLoader()
+            parsed = loader.parse("router/rule_fallback.md")
+            
+            system_prompt = loader.render(
+                parsed["sections"]["system"],
+                {
+                    "skills_summary_json": json.dumps(skills_summary, ensure_ascii=False),
+                    "tools_summary_json": json.dumps(tools_summary, ensure_ascii=False),
+                },
+                strict=True,
             )
-            user = "\n".join(
-                [
-                    f"任务描述: {task.description}",
-                    "仅使用提供的技能/工具做出最合适的路由选择。",
-                ]
+            user_prompt = loader.render(
+                parsed["sections"].get("user", ""),
+                {
+                    "task_description": task.description,
+                },
+                strict=True,
             )
             llm_result = llm_client.complete_json(
                 purpose=purpose,
-                system=system,
-                user=user,
+                system=system_prompt,
+                user=user_prompt,
                 schema_hint=ROUTE_SCHEMA,
+                chat_history_messages=chat_history_messages,
             )
             if isinstance(llm_result, dict):
                 route_type = llm_result.get("route_type")
