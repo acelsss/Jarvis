@@ -108,11 +108,37 @@ Jarvis 的标准执行链为：
 - local tools（Python）
 - MCP tools（远程）
 - desktop operator tools（本地高权限）
+- **外部 Agent/CLI 工具**（如 OpenCode、GitHub Copilot CLI 等）
 
 要求：
 - ToolSpec/ToolResult 统一
 - risk_level 可评估
 - evidence_refs 可定位
+
+#### 外部 Agent/CLI 工具集成模式
+
+Jarvis 支持通过统一的 Tool 接口接入外部 Agent 或 CLI 工具，确保受控执行、风险门控、审计与产物差分。
+
+**集成原则**：
+- 统一通过 Tool 接口接入，禁止直接使用通用 shell 工具执行外部 Agent
+- 所有执行必须走 Tool Runner，受风险门控约束
+- 默认禁止直接操作真实工程目录，强制使用 `sandbox/workspaces/` 下的隔离环境
+- 完整的审计日志记录（事件类型、参数摘要、执行结果、变更文件列表）
+- 产物差分：执行前后快照对比，输出 `changed_files` 清单
+
+**示例**：
+- `opencode_run`：通过 CLI 调用 OpenCode 执行编码任务
+  - 详细设计文档：[INTEGRATION_OPENCODE_CLI.md](INTEGRATION_OPENCODE_CLI.md)
+  - 风险等级：默认 R3（会修改代码、执行命令）
+  - 工作目录限制：必须在 `sandbox/workspaces/` 下
+  - 审计事件：`tool.opencode_run`
+
+**未来扩展**：
+- 其他编码 Agent（如 Aider、Continue、GitHub Copilot CLI）
+- 代码分析工具（如 Semgrep、CodeQL）
+- 测试生成工具（如 Codium、TestGen）
+
+所有外部工具集成都应遵循相同的设计模式：专用 Tool、风险门控、审计日志、产物差分。
 
 ### 4.5 Interfaces（可扩展）
 - CLI / Voice / Webhook / WeChat / GUI

@@ -228,3 +228,14 @@ v0.1 不允许。Skill 是流程资产，执行必须通过 ToolRunner，且受�
 
 ### Q3: Router 越写越复杂怎么办？
 把复杂判断下放到 “Planner/SkillMatch”，Router 只做粗分发；必要时引入 LangGraph 作为 planner，但不要破坏 contracts。
+
+### Q4: 如何集成外部 Agent 或 CLI 工具（如 OpenCode、Aider 等）？
+统一通过 Tool 接口接入，遵循以下原则：
+- 创建专用 Tool（如 `opencode_run`），不要使用通用 shell 工具
+- 默认风险等级至少 R2，会修改代码的建议 R3
+- 工作目录限制在 `sandbox/workspaces/` 下，禁止直接操作真实工程目录
+- 完整的审计日志（事件类型、参数摘要、执行结果、变更文件列表）
+- 产物差分：执行前后快照对比，输出 `changed_files` 清单
+
+参考示例：[INTEGRATION_OPENCODE_CLI.md](INTEGRATION_OPENCODE_CLI.md)（OpenCode CLI 集成设计文档）
+更多扩展点说明：[EXTENSION_POINTS.md](EXTENSION_POINTS.md#44-tool-providers可扩展)

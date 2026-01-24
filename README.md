@@ -165,6 +165,13 @@ python -m apps.cli.main
 - 屏幕证据与回滚策略（截图/录屏/操作日志）
 - "先 dry-run 再执行"的交互范式
 
+### Integrations（外部工具集成）
+
+- **OpenCode CLI 集成（A 线路）**：通过 CLI 调用 OpenCode 执行编码任务
+  - 设计文档：[docs/INTEGRATION_OPENCODE_CLI.md](docs/INTEGRATION_OPENCODE_CLI.md)
+  - 状态：设计完成，待实施
+  - 风险等级：R3（会修改代码、执行命令）
+
 ---
 
 ## Notes
