@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jarvis - 智能助理</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg width="40" height="40" viewBox="0 0 40 40" class="logo-icon">
+                        <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="2,2"/>
+                        <circle cx="20" cy="20" r="12" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                        <circle cx="20" cy="20" r="6" fill="currentColor"/>
+                    </svg>
+                    <h1>Jarvis</h1>
+                </div>
+                <p class="version">v0.1.0</p>
+            </div>
+            
+            <nav class="nav-menu">
+                <button class="nav-item active" data-view="chat">
+                    <span class="nav-icon">💬</span>
+                    <span>对话</span>
+                </button>
+                <button class="nav-item" data-view="tasks">
+                    <span class="nav-icon">📋</span>
+                    <span>任务</span>
+                </button>
+                <button class="nav-item" data-view="skills">
+                    <span class="nav-icon">🛠️</span>
+                    <span>技能</span>
+                </button>
+                <button class="nav-item" data-view="tools">
+                    <span class="nav-icon">⚙️</span>
+                    <span>工具</span>
+                </button>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">已连接</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 聊天视图 -->
+            <div class="view chat-view active" id="chat-view">
+                <div class="chat-header">
+                    <h2>与 Jarvis 对话</h2>
+                    <button class="btn-clear" id="clear-chat">清空对话</button>
+                </div>
+                
+                <div class="chat-messages" id="chat-messages">
+                    <div class="message assistant">
+                        <div class="message-avatar">🤖</div>
+                        <div class="message-content">
+                            <div class="message-text">
+                                你好！我是 Jarvis，你的智能助理。我可以帮你处理各种任务，包括文件操作、代码执行、问题回答等。
+                            </div>
+                            <div class="message-time">刚刚</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="task-progress" id="task-progress" style="display: none;">
+                    <div class="progress-header">
+                        <h3>任务执行中...</h3>
+                        <button class="btn-close-progress" id="close-progress">×</button>
+                    </div>
+                    <div class="progress-steps" id="progress-steps"></div>
+                </div>
+                
+                <div class="approval-panel" id="approval-panel" style="display: none;">
+                    <div class="approval-content">
+                        <h3>⚠️ 需要审批</h3>
+                        <p class="approval-message">此任务包含高风险操作，需要您的确认才能继续执行。</p>
+                        <div class="approval-steps" id="approval-steps"></div>
+                        <div class="approval-actions">
+                            <button class="btn btn-danger" id="btn-reject">拒绝</button>
+                            <button class="btn btn-primary" id="btn-approve">批准</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="chat-input-container">
+                    <div class="input-wrapper">
+                        <textarea 
+                            id="chat-input" 
+                            class="chat-input" 
+                            placeholder="输入你的任务或问题..."
+                            rows="1"
+                        ></textarea>
+                        <button class="btn-send" id="btn-send">
+                            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                                <path d="M2 10L18 2L12 18L10 11L2 10Z" fill="currentColor"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 任务视图 -->
+            <div class="view tasks-view" id="tasks-view">
+                <div class="view-header">
+                    <h2>任务列表</h2>
+                </div>
+                <div class="tasks-list" id="tasks-list">
+                    <div class="empty-state">
+                        <p>暂无任务</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 技能视图 -->
+            <div class="view skills-view" id="skills-view">
+                <div class="view-header">
+                    <h2>可用技能</h2>
+                </div>
+                <div class="skills-grid" id="skills-grid">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <!-- 工具视图 -->
+            <div class="view tools-view" id="tools-view">
+                <div class="view-header">
+                    <h2>可用工具</h2>
+                </div>
+                <div class="tools-grid" id="tools-grid">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
